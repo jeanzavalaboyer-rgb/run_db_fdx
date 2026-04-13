@@ -5,6 +5,7 @@ import pandas as pd
 import urllib3
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from zoneinfo import ZoneInfo
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -118,7 +119,7 @@ def build_dataframe(data) -> pd.DataFrame:
         ).reset_index(drop=True)
 
     # Última columna con fecha y hora de actualización
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d %H:%M:%S %Z")
     df["last_updated"] = timestamp
 
     return df
