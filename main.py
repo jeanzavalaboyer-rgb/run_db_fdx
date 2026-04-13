@@ -1,16 +1,14 @@
 import os
-from datetime import datetime
 import requests
 import pandas as pd
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# =========================
-# FEEDONOMICS API
-# =========================
 api_key = os.environ["FEEDONOMICS_API_KEY"]
-account_id = 1717
+account_id = int(os.getenv("ACCOUNT_ID", "1717"))
+output_file = os.getenv("OUTPUT_NAME", "global_databases.xlsx")
+
 service_path = "https://meta.feedonomics.com/api.php"
 
 headers = {
@@ -19,9 +17,6 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# =========================
-# API CALL FEEDONOMICS
-# =========================
 def get_account_status(account_id: int):
     url = f"{service_path}/accounts/{account_id}/status"
     resp = requests.get(url, headers=headers, verify=False, timeout=60)
@@ -31,10 +26,7 @@ def get_account_status(account_id: int):
 
     return resp.json()
 
-# =========================
-# MAIN
-# =========================
-try:
+def main():
     data = get_account_status(account_id)
 
     rows = []
@@ -56,19 +48,16 @@ try:
             by=["export_status", "import_status", "db_name"]
         ).reset_index(drop=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = f"global_databases_{timestamp}.xlsx"
-
     df.to_excel(output_file, index=False, sheet_name="Global Databases")
 
     print(f"✅ Excel generado correctamente: {output_file}")
 
-    print("\n📊 Resumen export_status:")
-    print(df["export_status"].value_counts(dropna=False))
+    if not df.empty:
+        print("\n📊 Resumen export_status:")
+        print(df["export_status"].value_counts(dropna=False))
 
-    print("\n📊 Resumen import_status:")
-    print(df["import_status"].value_counts(dropna=False))
+        print("\n📊 Resumen import_status:")
+        print(df["import_status"].value_counts(dropna=False))
 
-except Exception as e:
-    print(f"❌ Error: {str(e)}")
-    raise
+if __name__ == "__main__":
+    main()
