@@ -1,0 +1,35 @@
+name: Update_Global_Exports_FDX
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-sheet:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create Google credentials file
+        run: |
+          cat <<'EOF' > merchantapi-fdx.json
+          ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EOF
+
+      - name: Run update script
+        env:
+          FEEDONOMICS_API_KEY: ${{ secrets.FEEDONOMICS_API_KEY }}
+          SPREADSHEET_ID: "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw"
+          DATABASES_SHEET: "DataBases"
+          OUTPUT_SHEET: "Global Exports"
+          MAX_WORKERS: "10"
+        run: python main_global_exports.py
