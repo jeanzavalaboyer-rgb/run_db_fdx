@@ -2,6 +2,15 @@ name: Export Feedonomics to Excel
 
 on:
   workflow_dispatch:
+    inputs:
+      account_id:
+        description: "Feedonomics account ID"
+        required: true
+        default: "1717"
+      output_name:
+        description: "Excel output filename"
+        required: true
+        default: "global_databases.xlsx"
 
 jobs:
   export-excel:
@@ -22,10 +31,12 @@ jobs:
       - name: Run export script
         env:
           FEEDONOMICS_API_KEY: ${{ secrets.FEEDONOMICS_API_KEY }}
+          ACCOUNT_ID: ${{ inputs.account_id }}
+          OUTPUT_NAME: ${{ inputs.output_name }}
         run: python main.py
 
       - name: Upload Excel artifact
         uses: actions/upload-artifact@v4
         with:
           name: feedonomics-excel
-          path: "*.xlsx"
+          path: ${{ inputs.output_name }}
