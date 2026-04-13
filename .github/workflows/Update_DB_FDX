@@ -1,4 +1,4 @@
-name: Update Feedonomics Google Sheet
+name: Update_DB_FDX
 
 on:
   workflow_dispatch:
