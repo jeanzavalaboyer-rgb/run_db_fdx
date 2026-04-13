@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+
+# Excel outputs (los que genera tu script)
+*.xlsx
+
+# Secrets / credenciales
+*.json
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
