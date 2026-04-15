@@ -33,4 +33,4 @@ jobs:
           TARGET_SHEET: "Update Transformers"
           FEEDONOMICS_SERVICE_PATH: "https://meta.feedonomics.com/api.php"
           GOOGLE_APPLICATION_CREDENTIALS: "merchantapi-fdx.json"
-        run: getfields.py
+        run: python getfields.py
