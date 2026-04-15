@@ -1,0 +1,34 @@
+name: Update_Transformers_FDX
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-sheet:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create Google credentials file
+        run: |
+          cat <<'EOF' > merchantapi-fdx.json
+          ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          EOF
+
+      - name: Run script
+        env:
+          FEEDONOMICS_API_KEY: ${{ secrets.FEEDONOMICS_API_KEY }}
+          SPREADSHEET_ID: "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw"
+          TARGET_SHEET: "Update Transformers"
+          GOOGLE_APPLICATION_CREDENTIALS: "merchantapi-fdx.json"
+        run: python gettransformers.py
