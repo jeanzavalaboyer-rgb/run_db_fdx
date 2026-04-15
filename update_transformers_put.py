@@ -98,31 +98,27 @@ def normalize_transformer(value):
     if not value:
         raise ValueError("New Transformer vacío")
 
-    # Si parece una expresión de Feedonomics, dejar tal cual
     expression_signs = ["(", ")", "[", "]", ","]
     if any(sign in value for sign in expression_signs):
         return value
 
-    # Si ya viene correctamente entre comillas simples
     if value.startswith("'") and value.endswith("'"):
         return value
 
-    # Limpiar comillas sueltas y envolver como string literal
     clean_value = value.replace("'", "").strip()
     return f"'{clean_value}'"
 
-def parse_exports(exports_value):
+def parse_export_ids(exports_value):
     """
-    Convierte el contenido de la columna exports a la estructura completa:
-    {
-      "export_ids": [...],
-      "all_exports": true/false
-    }
+    Lee la columna exports del sheet y devuelve lo que la API requiere:
+    export_id = [ ... ]
 
-    Si el valor viene vacío o malformado, usa default seguro:
-    {"export_ids":[0],"all_exports":true}
+    Ejemplos soportados:
+    {"export_ids":[0],"all_exports":true}  -> [0]
+    {"export_ids":["12","13"]}             -> [12, 13]
+    vacío / inválido                       -> [0]
     """
-    default_value = {"export_ids": [0], "all_exports": True}
+    default_value = [0]
 
     if exports_value is None:
         return default_value
@@ -134,11 +130,12 @@ def parse_exports(exports_value):
     try:
         parsed = json.loads(exports_str)
 
-        if not isinstance(parsed, dict):
+        if isinstance(parsed, dict):
+            export_ids = parsed.get("export_ids", [0])
+        elif isinstance(parsed, list):
+            export_ids = parsed
+        else:
             return default_value
-
-        export_ids = parsed.get("export_ids", [0])
-        all_exports = parsed.get("all_exports", False)
 
         if not isinstance(export_ids, list):
             export_ids = [export_ids]
@@ -150,10 +147,7 @@ def parse_exports(exports_value):
             except Exception:
                 normalized_ids.append(int(float(str(item))))
 
-        return {
-            "export_ids": normalized_ids if normalized_ids else [0],
-            "all_exports": bool(all_exports)
-        }
+        return normalized_ids if normalized_ids else default_value
 
     except Exception:
         return default_value
@@ -172,7 +166,7 @@ def update_transformer(row):
     selector = normalize_selector(row["New Selector"])
     transformer = normalize_transformer(row["New Transformer"])
     enabled = normalize_bool(row["enabled"])
-    exports = parse_exports(row["exports"])
+    export_ids = parse_export_ids(row["exports"])
 
     url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
 
@@ -181,7 +175,7 @@ def update_transformer(row):
         "field_name": field_name,
         "selector": selector,
         "transformer": transformer,
-        "exports": exports
+        "export_id": export_ids
     }
 
     resp = requests.put(
