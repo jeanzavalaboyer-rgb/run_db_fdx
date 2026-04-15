@@ -112,29 +112,51 @@ def normalize_transformer(value):
     return f"'{clean_value}'"
 
 def parse_exports(exports_value):
+    """
+    Convierte el contenido de la columna exports a la estructura completa:
+    {
+      "export_ids": [...],
+      "all_exports": true/false
+    }
+
+    Si el valor viene vacío o malformado, usa default seguro:
+    {"export_ids":[0],"all_exports":true}
+    """
+    default_value = {"export_ids": [0], "all_exports": True}
+
     if exports_value is None:
-        return [0]
+        return default_value
 
     exports_str = str(exports_value).strip()
     if not exports_str:
-        return [0]
+        return default_value
 
     try:
         parsed = json.loads(exports_str)
+
+        if not isinstance(parsed, dict):
+            return default_value
+
         export_ids = parsed.get("export_ids", [0])
+        all_exports = parsed.get("all_exports", False)
 
-        if isinstance(export_ids, list):
-            normalized = []
-            for item in export_ids:
-                try:
-                    normalized.append(int(item))
-                except Exception:
-                    normalized.append(int(float(str(item))))
-            return normalized
+        if not isinstance(export_ids, list):
+            export_ids = [export_ids]
 
-        return [int(export_ids)]
+        normalized_ids = []
+        for item in export_ids:
+            try:
+                normalized_ids.append(int(item))
+            except Exception:
+                normalized_ids.append(int(float(str(item))))
+
+        return {
+            "export_ids": normalized_ids if normalized_ids else [0],
+            "all_exports": bool(all_exports)
+        }
+
     except Exception:
-        return [0]
+        return default_value
 
 # =========================
 # FEEDONOMICS UPDATE
@@ -150,7 +172,7 @@ def update_transformer(row):
     selector = normalize_selector(row["New Selector"])
     transformer = normalize_transformer(row["New Transformer"])
     enabled = normalize_bool(row["enabled"])
-    export_ids = parse_exports(row["exports"])
+    exports = parse_exports(row["exports"])
 
     url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
 
@@ -159,7 +181,7 @@ def update_transformer(row):
         "field_name": field_name,
         "selector": selector,
         "transformer": transformer,
-        "export_id": export_ids
+        "exports": exports
     }
 
     resp = requests.put(
