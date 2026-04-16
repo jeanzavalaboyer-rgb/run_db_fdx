@@ -117,14 +117,9 @@ def normalize_transformer(value):
 
 def parse_exports_object(exports_value):
     """
-    Normaliza la columna exports a un dict estándar.
-
-    Casos soportados:
-    {"export_ids":["325582","325580"],"all_exports":false}
-    {"export_ids":[0],"all_exports":true}
-    {"export_ids":[],"all_exports":false}
+    Mantiene el objeto completo de exports, normalizando export_ids como strings.
     """
-    default_value = {"export_ids": [0], "all_exports": True}
+    default_value = {"export_ids": ["0"], "all_exports": True}
 
     if exports_value is None:
         return default_value
@@ -139,7 +134,7 @@ def parse_exports_object(exports_value):
         if not isinstance(parsed, dict):
             return default_value
 
-        raw_export_ids = parsed.get("export_ids", [0])
+        raw_export_ids = parsed.get("export_ids", ["0"])
         raw_all_exports = parsed.get("all_exports", False)
 
         if not isinstance(raw_export_ids, list):
@@ -151,13 +146,14 @@ def parse_exports_object(exports_value):
             if item_str == "":
                 continue
 
+            # si viene 470091.0, lo normalizamos a 470091
             try:
-                normalized_ids.append(int(item_str))
+                if "." in item_str:
+                    item_str = str(int(float(item_str)))
             except Exception:
-                try:
-                    normalized_ids.append(int(float(item_str)))
-                except Exception:
-                    continue
+                pass
+
+            normalized_ids.append(item_str)
 
         return {
             "export_ids": normalized_ids,
@@ -170,17 +166,17 @@ def parse_exports_object(exports_value):
 
 def parse_export_ids(exports_value):
     """
-    Devuelve el export_id correcto para el PUT.
+    Devuelve export_id como lista de strings.
 
     Reglas:
-    - all_exports = true  -> [0]
-    - all_exports = false -> usar export_ids tal cual
-    - si false y export_ids viene vacío -> []
+    - all_exports = true  -> ["0"]
+    - all_exports = false -> usar export_ids reales como strings
+    - si viene vacío      -> []
     """
     exports_obj = parse_exports_object(exports_value)
 
     if exports_obj["all_exports"] is True:
-        return [0]
+        return ["0"]
 
     return exports_obj["export_ids"]
 
