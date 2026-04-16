@@ -26,6 +26,7 @@ SHEET_NAME = os.getenv("SHEET_NAME", "Update Transformers")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+
 # =========================
 # GOOGLE SHEETS
 # =========================
@@ -35,6 +36,7 @@ def get_sheets_service():
         scopes=SCOPES
     )
     return build("sheets", "v4", credentials=creds)
+
 
 def read_sheet():
     service = get_sheets_service()
@@ -62,6 +64,7 @@ def read_sheet():
 
     return df
 
+
 # =========================
 # HELPERS
 # =========================
@@ -71,6 +74,7 @@ def clean_int(value):
         raise ValueError("Valor entero vacío")
     return int(float(value))
 
+
 def normalize_bool(value):
     value = str(value).strip().lower()
     if value in ["true", "1", "yes", "y"]:
@@ -78,6 +82,7 @@ def normalize_bool(value):
     if value in ["false", "0", "no", "n"]:
         return False
     raise ValueError(f"Valor inválido para enabled: {value}")
+
 
 def normalize_selector(value):
     value = str(value).strip()
@@ -91,6 +96,7 @@ def normalize_selector(value):
         return "false"
 
     return value
+
 
 def normalize_transformer(value):
     value = str(value).strip()
@@ -108,13 +114,15 @@ def normalize_transformer(value):
     clean_value = value.replace("'", "").strip()
     return f"'{clean_value}'"
 
+
 def parse_exports_object(exports_value):
     """
-    Devuelve el objeto completo:
-    {
-      "export_ids": [0],
-      "all_exports": True
-    }
+    Normaliza la columna exports a un dict estándar.
+
+    Casos soportados:
+    {"export_ids":["325582","325580"],"all_exports":false}
+    {"export_ids":[0],"all_exports":true}
+    {"export_ids":[],"all_exports":false}
     """
     default_value = {"export_ids": [0], "all_exports": True}
 
@@ -131,33 +139,51 @@ def parse_exports_object(exports_value):
         if not isinstance(parsed, dict):
             return default_value
 
-        export_ids = parsed.get("export_ids", [0])
-        all_exports = parsed.get("all_exports", False)
+        raw_export_ids = parsed.get("export_ids", [0])
+        raw_all_exports = parsed.get("all_exports", False)
 
-        if not isinstance(export_ids, list):
-            export_ids = [export_ids]
+        if not isinstance(raw_export_ids, list):
+            raw_export_ids = [raw_export_ids]
 
         normalized_ids = []
-        for item in export_ids:
-            try:
-                normalized_ids.append(int(item))
-            except Exception:
-                normalized_ids.append(int(float(str(item))))
+        for item in raw_export_ids:
+            item_str = str(item).strip()
+            if item_str == "":
+                continue
 
-        if not normalized_ids:
-            normalized_ids = [0]
+            try:
+                normalized_ids.append(int(item_str))
+            except Exception:
+                try:
+                    normalized_ids.append(int(float(item_str)))
+                except Exception:
+                    continue
 
         return {
             "export_ids": normalized_ids,
-            "all_exports": bool(all_exports)
+            "all_exports": bool(raw_all_exports)
         }
 
     except Exception:
         return default_value
 
+
 def parse_export_ids(exports_value):
+    """
+    Devuelve el export_id correcto para el PUT.
+
+    Reglas:
+    - all_exports = true  -> [0]
+    - all_exports = false -> usar export_ids tal cual
+    - si false y export_ids viene vacío -> []
+    """
     exports_obj = parse_exports_object(exports_value)
-    return exports_obj.get("export_ids", [0])
+
+    if exports_obj["all_exports"] is True:
+        return [0]
+
+    return exports_obj["export_ids"]
+
 
 # =========================
 # FEEDONOMICS UPDATE
@@ -175,7 +201,7 @@ def update_transformer(row):
     enabled = normalize_bool(row["enabled"])
 
     exports_obj = parse_exports_object(row["exports"])
-    export_ids = exports_obj["export_ids"]
+    export_ids = parse_export_ids(row["exports"])
 
     url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
 
@@ -203,6 +229,7 @@ def update_transformer(row):
 
     return resp.status_code, response_text, payload
 
+
 # =========================
 # WRITE STATUS IN K:L
 # =========================
@@ -220,6 +247,7 @@ def write_status(results):
         valueInputOption="RAW",
         body={"values": values}
     ).execute()
+
 
 # =========================
 # MAIN
@@ -258,6 +286,13 @@ def main():
                 error = "Fila omitida: db_id y transformer_id vacíos"
                 print(f"⏭️ Fila {sheet_row} omitida")
             else:
+                exports_obj = parse_exports_object(row.get("exports", ""))
+                export_ids = parse_export_ids(row.get("exports", ""))
+
+                print(f"Fila {sheet_row} | exports original: {row.get('exports', '')}")
+                print(f"Fila {sheet_row} | exports parseado: {json.dumps(exports_obj, ensure_ascii=False)}")
+                print(f"Fila {sheet_row} | export_id enviado: {export_ids}")
+
                 status_code, response, payload = update_transformer(row)
 
                 if status_code == 200:
@@ -291,6 +326,7 @@ def main():
     print("\n✅ Resultados escritos en columnas K y L")
     print("K = update_status")
     print("L = error_message")
+
 
 if __name__ == "__main__":
     main()
