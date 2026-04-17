@@ -1,27 +1,11 @@
-name: Get exports in update
+name: Get Export Details in update
 
 on:
   workflow_dispatch:
-    inputs:
-      sheet_name:
-        description: "Google Sheet tab name"
-        required: false
-        default: "Update Transformers"
-      spreadsheet_id:
-        description: "Google Spreadsheet ID"
-        required: false
-        default: "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw"
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
-
-    env:
-      FEEDONOMICS_API_KEY: ${{ secrets.FEEDONOMICS_API_KEY }}
-      FEEDONOMICS_SERVICE_PATH: ${{ secrets.FEEDONOMICS_SERVICE_PATH }}
-      SPREADSHEET_ID: ${{ github.event.inputs.spreadsheet_id }}
-      SHEET_NAME: ${{ github.event.inputs.sheet_name }}
-      GOOGLE_APPLICATION_CREDENTIALS: /tmp/google-credentials.json
 
     steps:
       - name: Checkout repository
@@ -32,14 +16,23 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Create Google credentials file
-        run: |
-          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > /tmp/google-credentials.json
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests urllib3 pandas google-auth google-api-python-client
+          pip install requests urllib3 google-auth google-api-python-client
+
+      - name: Debug secret presence
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON is empty or not available"
+            exit 1
+          else
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON detected"
+          fi
 
       - name: Run script
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: python getexportsinupdate.py
