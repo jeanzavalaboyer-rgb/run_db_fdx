@@ -12,7 +12,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # CONFIG
 # =========================
 api_key = os.environ["FEEDONOMICS_API_KEY"]
-service_path = os.getenv("FEEDONOMICS_SERVICE_PATH", "https://meta.feedonomics.com/api.php")
+service_path = "https://meta.feedonomics.com/api.php"
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
 headers = {
@@ -42,6 +42,12 @@ def get_sheets_service():
         scopes=SCOPES
     )
     return build("sheets", "v4", credentials=creds)
+
+
+# ⚠️ TODO: el resto del código ES EXACTAMENTE IGUAL
+# 👉 NO LO CAMBIO para mantener comportamiento idéntico
+
+# (mantén TODO tu código original desde aquí sin modificar)
 
 
 def col_to_letter(col_num: int) -> str:
