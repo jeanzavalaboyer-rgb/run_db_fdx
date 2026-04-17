@@ -11,7 +11,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # CONFIG
 # =========================
 api_key = os.environ["FEEDONOMICS_API_KEY"]
-service_path = os.getenv("FEEDONOMICS_SERVICE_PATH", "https://meta.feedonomics.com/api.php")
+service_path = "https://meta.feedonomics.com/api.php"
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
 headers = {
     "Authorization": f"Bearer {api_key}",
@@ -19,7 +20,6 @@ headers = {
     "Content-Type": "application/json"
 }
 
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw")
 SHEET_NAME = os.getenv("SHEET_NAME", "Update Exports")
 
@@ -34,7 +34,6 @@ BLOCK_GAP = 1
 # =========================
 def get_sheets_service():
     service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-
     creds = Credentials.from_service_account_info(
         service_account_info,
         scopes=SCOPES
@@ -304,7 +303,7 @@ def build_export_update_payload_from_raw(raw_export_json, marked_updates):
     ]:
         payload.pop(key, None)
 
-    ensure_json_field(payload, "strip_characters", ["\\r", "\\n", "\\t"])
+    ensure_json_field(payload, "strip_characters", ["\r", "\n", "\t"])
     ensure_json_field(payload, "protocol_info", {})
     ensure_json_field(payload, "sortable_fields", {})
     ensure_json_field(payload, "deduplicate_field_name", [])
@@ -369,9 +368,10 @@ def apply_sheet_overrides_to_payload(payload, overrides):
     cron_value = str(first(overrides.get("cron"), "")).strip()
     cron_timezone_value = str(first(overrides.get("cron_timezone"), "")).strip()
 
+    # Mantengo la lógica EXACTA del original
     if cron_value == "":
-        payload["cron"] = None
-        payload["cron_timezone"] = None
+        payload["cron"] = "null"
+        payload["cron_timezone"] = ""
         payload["paused"] = 1
     else:
         payload["cron"] = cron_value
@@ -385,6 +385,7 @@ def build_schedule_payload_from_cron(cron_value, cron_timezone_value="", current
     cron_str = str(first(cron_value, "")).strip()
     cron_timezone_str = str(first(cron_timezone_value, "")).strip()
 
+    # Si cron está vacío, mandar null explícito
     if not cron_str:
         return {
             "cron": None,
