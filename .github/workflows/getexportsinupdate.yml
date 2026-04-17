@@ -22,7 +22,6 @@ jobs:
 
     env:
       FEEDONOMICS_API_KEY: ${{ secrets.FEEDONOMICS_API_KEY }}
-      FEEDONOMICS_SERVICE_PATH: ${{ secrets.FEEDONOMICS_SERVICE_PATH }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SPREADSHEET_ID: ${{ github.event.inputs.spreadsheet_id }}
       SHEET_NAME: ${{ github.event.inputs.sheet_name }}
@@ -37,7 +36,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 🔍 VALIDACIÓN DE SECRETS (esto evita tu error)
+      # ✅ Validación (evita tu error anterior)
       - name: Validate required secrets
         run: |
           if [ -z "$FEEDONOMICS_API_KEY" ]; then
@@ -49,13 +48,6 @@ jobs:
             echo "❌ Missing GOOGLE_SERVICE_ACCOUNT_JSON"
             exit 1
           fi
-
-      # 🔍 DEBUG (puedes quitarlo después)
-      - name: Debug environment
-        run: |
-          echo "Sheet: $SHEET_NAME"
-          echo "Spreadsheet: $SPREADSHEET_ID"
-          echo "API KEY LENGTH: ${#FEEDONOMICS_API_KEY}"
 
       - name: Install dependencies
         run: |
