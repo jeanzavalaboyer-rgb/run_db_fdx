@@ -1,11 +1,32 @@
-name: Get Export Details in update
+name: Run Get Exports in Update
 
 on:
   workflow_dispatch:
+    inputs:
+      sheet_name:
+        description: "Google Sheet tab name"
+        required: false
+        default: "Update Exports"
+      spreadsheet_id:
+        description: "Google Spreadsheet ID"
+        required: false
+        default: "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw"
+      available_fields_sheet:
+        description: "Available Fields tab"
+        required: false
+        default: "Available Fields"
 
 jobs:
   run-script:
     runs-on: ubuntu-latest
+
+    env:
+      FEEDONOMICS_API_KEY: ${{ secrets.FEEDONOMICS_API_KEY }}
+      FEEDONOMICS_SERVICE_PATH: ${{ secrets.FEEDONOMICS_SERVICE_PATH }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SPREADSHEET_ID: ${{ github.event.inputs.spreadsheet_id }}
+      SHEET_NAME: ${{ github.event.inputs.sheet_name }}
+      AVAILABLE_FIELDS_SHEET: ${{ github.event.inputs.available_fields_sheet }}
 
     steps:
       - name: Checkout repository
@@ -16,23 +37,30 @@ jobs:
         with:
           python-version: "3.11"
 
+      # 🔍 VALIDACIÓN DE SECRETS (esto evita tu error)
+      - name: Validate required secrets
+        run: |
+          if [ -z "$FEEDONOMICS_API_KEY" ]; then
+            echo "❌ Missing FEEDONOMICS_API_KEY"
+            exit 1
+          fi
+
+          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "❌ Missing GOOGLE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+
+      # 🔍 DEBUG (puedes quitarlo después)
+      - name: Debug environment
+        run: |
+          echo "Sheet: $SHEET_NAME"
+          echo "Spreadsheet: $SPREADSHEET_ID"
+          echo "API KEY LENGTH: ${#FEEDONOMICS_API_KEY}"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests urllib3 google-auth google-api-python-client
 
-      - name: Debug secret presence
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: |
-          if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "GOOGLE_SERVICE_ACCOUNT_JSON is empty or not available"
-            exit 1
-          else
-            echo "GOOGLE_SERVICE_ACCOUNT_JSON detected"
-          fi
-
       - name: Run script
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: python getexportsinupdate.py
