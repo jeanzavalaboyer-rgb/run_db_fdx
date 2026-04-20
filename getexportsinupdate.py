@@ -7,12 +7,11 @@ from googleapiclient.discovery import build
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# =====================================================
+# =========================
 # CONFIG
-# =====================================================
+# =========================
 api_key = os.environ["FEEDONOMICS_API_KEY"]
 service_path = "https://meta.feedonomics.com/api.php"
-
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
 headers = {
@@ -21,23 +20,14 @@ headers = {
     "Content-Type": "application/json"
 }
 
-SPREADSHEET_ID = os.getenv(
-    "SPREADSHEET_ID",
-    "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw"
-)
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw")
+SHEET_NAME = os.getenv("SHEET_NAME", "Update Exports")
 
-SHEET_NAME = os.getenv(
-    "SHEET_NAME",
-    "Update Exports"
-)
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets"
-]
-
-# =====================================================
-# SHEET LAYOUT
-# =====================================================
+# =========================
+# INPUT / OUTPUT LAYOUT
+# =========================
 # A = Action
 # B = status_message
 # C = error_message
@@ -45,27 +35,33 @@ SCOPES = [
 # E = db_id
 # F = export_id
 # G = export_name
-# H = cron
-# I = file_name
-# J = export_protocol
-# K = username
-# L = cron_timezone
-# M = destination
-# N = host
-# O = password
-# P = raw_export_json
-# Q = field_json
-# R = export_selector
-# S = threshold
-# T,U,V = id_1, field_name_1, export_field_name_1
-# W,X,Y = id_2, field_name_2, export_field_name_2
-# ...
 
-INPUT_RANGE = "A:ZZ"
+INPUT_RANGE = "A:G"
+OUTPUT_START_CELL = "D1"
 
-# =====================================================
+FIXED_HEADERS = [
+    "db_name",
+    "db_id",
+    "export_id",
+    "export_name",
+    "cron",
+    "file_name",
+    "export_protocol",
+    "username",
+    "cron_timezone",
+    "destination",
+    "host",
+    "password",
+    "raw_export_json",
+    "field_json",
+    "export_selector",
+    "threshold"
+]
+
+
+# =========================
 # GOOGLE SHEETS
-# =====================================================
+# =========================
 def get_sheets_service():
     service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
 
@@ -73,13 +69,12 @@ def get_sheets_service():
         service_account_info,
         scopes=SCOPES
     )
-
     return build("sheets", "v4", credentials=creds)
 
 
-# =====================================================
+# =========================
 # HELPERS
-# =====================================================
+# =========================
 def safe_json(resp):
     try:
         return resp.json()
@@ -105,41 +100,18 @@ def dumps_safe(obj):
         return str(obj)
 
 
-def normalize_action(v):
-    return str(v).strip().upper()
+def pad_rows(values, total_cols):
+    padded = []
+    for row in values:
+        row = row + [""] * (total_cols - len(row))
+        padded.append(row[:total_cols])
+    return padded
 
 
-def col_to_letter(col_num):
-    result = ""
-    while col_num > 0:
-        col_num, rem = divmod(col_num - 1, 26)
-        result = chr(65 + rem) + result
-    return result
-
-
-def values_differ(a, b):
-    return str(first(a, "")).strip() != str(first(b), "").strip()
-
-
-def ensure_json_field(payload, field_name, default):
-    value = payload.get(field_name)
-
-    if value is None or value == "":
-        payload[field_name] = default
-        return
-
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            payload[field_name] = parsed
-        except Exception:
-            payload[field_name] = default
-
-
-# =====================================================
-# SHEETS
-# =====================================================
-def read_sheet_matrix():
+# =========================
+# SHEETS READ / WRITE
+# =========================
+def read_sheet_rows():
     service = get_sheets_service()
 
     result = service.spreadsheets().values().get(
@@ -147,443 +119,409 @@ def read_sheet_matrix():
         range=f"{SHEET_NAME}!{INPUT_RANGE}"
     ).execute()
 
-    return result.get("values", [])
+    values = result.get("values", [])
+    if not values:
+        return []
+
+    values = pad_rows(values, 7)
+    data_rows = values[1:] if len(values) > 1 else []
+
+    rows = []
+    for idx, row in enumerate(data_rows, start=2):
+        action = str(row[0]).strip()
+        status_message = str(row[1]).strip()
+        error_message = str(row[2]).strip()
+        db_name = str(row[3]).strip()
+        db_id = str(row[4]).strip()
+        export_id = str(row[5]).strip()
+        export_name = str(row[6]).strip()
+
+        if (
+            action == "" and
+            status_message == "" and
+            error_message == "" and
+            db_name == "" and
+            db_id == "" and
+            export_id == "" and
+            export_name == ""
+        ):
+            continue
+
+        rows.append({
+            "sheet_row": idx,
+            "action": action,
+            "status_message": status_message,
+            "error_message": error_message,
+            "db_name": db_name,
+            "db_id": db_id,
+            "export_id": export_id,
+            "export_name": export_name
+        })
+
+    return rows
 
 
-def get_cell(matrix, row_1, col_1):
-    r = row_1 - 1
-    c = col_1 - 1
-
-    if r < 0 or r >= len(matrix):
-        return ""
-
-    row = matrix[r]
-
-    if c < 0 or c >= len(row):
-        return ""
-
-    return str(row[c]).strip()
-
-
-def write_cell(row_1, col_1, value):
+def clear_output():
     service = get_sheets_service()
-
-    col = col_to_letter(col_1)
-
-    service.spreadsheets().values().update(
+    service.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"{SHEET_NAME}!{col}{row_1}",
-        valueInputOption="RAW",
-        body={"values": [[value]]}
+        range=f"{SHEET_NAME}!D:ZZZ"
     ).execute()
 
 
-# =====================================================
-# API
-# =====================================================
-def update_export(db_id, export_id, payload):
-    url = f"{service_path}/dbs/{db_id}/exports/{export_id}"
+def write_output_table(headers, rows):
+    service = get_sheets_service()
 
-    resp = requests.put(
-        url,
-        headers=headers,
-        json=payload,
-        verify=False,
-        timeout=120
-    )
+    values = [headers] + rows
 
-    data = safe_json(resp)
+    service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SHEET_NAME}!{OUTPUT_START_CELL}",
+        valueInputOption="RAW",
+        body={"values": values}
+    ).execute()
 
-    if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}: {dumps_safe(data)}"
 
-    return True, dumps_safe(data)
+def update_status_columns(status_rows):
+    service = get_sheets_service()
 
-
-def update_export_schedule(db_id, export_id, payload):
-    url = f"{service_path}/dbs/{db_id}/exports/{export_id}/schedule"
-
-    resp = requests.put(
-        url,
-        headers=headers,
-        json=payload,
-        verify=False,
-        timeout=120
-    )
-
-    data = safe_json(resp)
-
-    if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}: {dumps_safe(data)}"
-
-    return True, dumps_safe(data)
-
-
-def delete_export(db_id, export_id):
-    url = f"{service_path}/dbs/{db_id}/exports/{export_id}"
-
-    resp = requests.delete(
-        url,
-        headers=headers,
-        verify=False,
-        timeout=120
-    )
-
-    data = safe_json(resp)
-
-    if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}: {dumps_safe(data)}"
-
-    return True, dumps_safe(data)
-
-
-# =====================================================
-# FIELD GROUPS
-# =====================================================
-def parse_horizontal_fields(row_values):
-    """
-    Desde columna T = 20 en adelante:
-    grupos de 3 columnas:
-    id / field_name / export_field_name
-    """
-    groups = []
-    col = 20
-
-    while col <= 500:
-        field_id = row_values.get(col, "")
-        field_name = row_values.get(col + 1, "")
-        export_field_name = row_values.get(col + 2, "")
-
-        if (
-            str(field_id).strip() == "" and
-            str(field_name).strip() == "" and
-            str(export_field_name).strip() == ""
-        ):
-            break
-
-        groups.append({
-            "id": str(field_id).strip(),
-            "field_name": str(field_name).strip(),
-            "export_field_name": str(export_field_name).strip()
-        })
-
-        col += 3
-
-    return groups
-
-
-# =====================================================
-# BUILD PAYLOAD
-# =====================================================
-def build_payload_from_raw(raw_json):
-    if not raw_json.strip():
-        raise Exception("raw_export_json vacío")
-
-    payload = json.loads(raw_json)
-
-    if not isinstance(payload, dict):
-        raise Exception("raw_export_json inválido")
-
-    for key in [
-        "created_at", "updated_at", "last_run_at", "next_run_time",
-        "timestamp", "worker_pid", "worker_hostname", "summary_worker_hostname",
-        "summary_worker_pid", "time_running", "average_chunk_memory",
-        "average_chunk_duration", "last_run_duration", "last_run_status",
-        "last_run_total_rows", "last_run_time", "paused_at", "worker_stage",
-        "health_status", "general_export_file_url"
-    ]:
-        payload.pop(key, None)
-
-    ensure_json_field(payload, "strip_characters", ["\r", "\n", "\t"])
-    ensure_json_field(payload, "protocol_info", {})
-    ensure_json_field(payload, "sortable_fields", {})
-    ensure_json_field(payload, "deduplicate_field_name", [])
-    ensure_json_field(payload, "tags", [])
-
-    return payload
-
-
-def apply_overrides(payload, row):
-    if row["file_name"]:
-        payload["file_name"] = row["file_name"]
-
-    if row["destination"]:
-        payload["destination"] = row["destination"]
-
-    if row["protocol"]:
-        payload["protocol"] = row["protocol"]
-
-    if row["host"]:
-        payload["host"] = row["host"]
-
-    if row["username"]:
-        payload["username"] = row["username"]
-
-    if row["password"]:
-        payload["password"] = row["password"]
-
-    if row["export_selector"]:
-        payload["export_selector"] = row["export_selector"]
-
-    if row["threshold"]:
-        payload["threshold"] = row["threshold"]
-
-    cron_value = str(first(row["cron"], "")).strip()
-    cron_timezone_value = str(first(row["cron_timezone"], "")).strip()
-
-    if cron_value == "":
-        payload["cron"] = "null"
-        payload["cron_timezone"] = ""
-        payload["paused"] = 1
-    else:
-        payload["cron"] = cron_value
-        if cron_timezone_value != "":
-            payload["cron_timezone"] = cron_timezone_value
-
-    return payload
-
-
-def replace_export_fields(payload, groups):
-    original = payload.get("export_fields", [])
-
-    if isinstance(original, dict):
-        original = list(original.values())
-
-    if not isinstance(original, list):
-        original = []
-
-    existing_by_id = {}
-
-    for item in original:
-        fid = str(first(
-            item.get("id"),
-            item.get("field_id"),
-            item.get("export_field_id")
-        )).strip()
-
-        if fid:
-            existing_by_id[fid] = dict(item)
-
-    final = {}
-    idx = 1
-
-    for g in groups:
-        fid = g["id"]
-        item = existing_by_id.get(fid, {"id": fid})
-
-        item["id"] = fid
-        item["field_name"] = g["field_name"]
-        item["export_field_name"] = g["export_field_name"]
-
-        final[f"field{idx}"] = item
-        idx += 1
-
-    payload["export_fields"] = final
-    return payload
-
-
-# =====================================================
-# SCHEDULE
-# =====================================================
-def build_schedule_payload_from_cron(cron_value, cron_timezone_value="", current_paused="0"):
-    cron_str = str(first(cron_value, "")).strip()
-    cron_timezone_str = str(first(cron_timezone_value, "")).strip()
-
-    if not cron_str:
-        return {
-            "cron": None,
-            "cron_timezone": None,
-            "paused": 1
-        }
-
-    parts = cron_str.split()
-    if len(parts) != 5:
-        raise Exception(f"Cron inválido: '{cron_str}'. Debe tener 5 partes.")
-
-    minute, hour, day_of_month, month, weekday = parts
-
-    if day_of_month != "*" or month != "*":
-        raise Exception(
-            f"Cron no soportado para /schedule: '{cron_str}'. "
-            f"Solo se soporta day_of_month='*' y month='*'."
-        )
-
-    weekday_map = {
-        "SUN": "0",
-        "MON": "1",
-        "TUE": "2",
-        "WED": "3",
-        "THU": "4",
-        "FRI": "5",
-        "SAT": "6"
-    }
-
-    weekday_upper = weekday.upper()
-    day_value = weekday_map.get(weekday_upper, weekday)
-
-    payload = {
-        "day": str(day_value),
-        "hour": str(hour),
-        "minute": str(minute),
-        "paused": int(str(first(current_paused, "0")).strip() or "0")
-    }
-
-    if cron_timezone_str != "":
-        payload["cron_timezone"] = cron_timezone_str
-
-    return payload
-
-
-# =====================================================
-# MAIN
-# =====================================================
-def main():
-    matrix = read_sheet_matrix()
-
-    if len(matrix) <= 1:
-        print("⚠️ No rows found")
+    if not status_rows:
         return
 
-    for row_num in range(2, len(matrix) + 1):
-        action = normalize_action(get_cell(matrix, row_num, 1))
+    status_rows_sorted = sorted(status_rows, key=lambda x: x["sheet_row"])
+    start_row = status_rows_sorted[0]["sheet_row"]
+    end_row = status_rows_sorted[-1]["sheet_row"]
 
-        if action not in ["UPDATE", "DELETE"]:
+    row_map = {item["sheet_row"]: item for item in status_rows_sorted}
+
+    values_b = []
+    values_c = []
+
+    for row_num in range(start_row, end_row + 1):
+        item = row_map.get(row_num, {})
+        values_b.append([item.get("status_message", "")])
+        values_c.append([item.get("error_message", "")])
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SHEET_NAME}!B{start_row}:B{end_row}",
+        valueInputOption="RAW",
+        body={"values": values_b}
+    ).execute()
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SHEET_NAME}!C{start_row}:C{end_row}",
+        valueInputOption="RAW",
+        body={"values": values_c}
+    ).execute()
+
+
+# =========================
+# API
+# =========================
+def get_exports(db_id):
+    url = f"{service_path}/dbs/{db_id}/exports"
+
+    resp = requests.get(
+        url,
+        headers=headers,
+        verify=False,
+        timeout=60
+    )
+
+    payload = safe_json(resp)
+
+    if resp.status_code != 200:
+        raise Exception(f"HTTP {resp.status_code}: {dumps_safe(payload)}")
+
+    if isinstance(payload, dict) and payload.get("status") == "fail":
+        raise Exception(f"Feedonomics fail payload: {dumps_safe(payload)}")
+
+    if not isinstance(payload, list):
+        raise Exception(f"Unexpected payload type: {type(payload)} | {payload}")
+
+    return payload
+
+
+def get_schedule_optional(db_id, export_id):
+    try:
+        url = f"{service_path}/dbs/{db_id}/exports/{export_id}/schedule"
+        resp = requests.get(
+            url,
+            headers=headers,
+            verify=False,
+            timeout=60
+        )
+
+        if resp.status_code == 200:
+            payload = safe_json(resp)
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        pass
+
+    return {}
+
+
+def find_export(exports, export_id=None, export_name=None):
+    if export_id:
+        export_id_str = str(export_id).strip()
+        for exp in exports:
+            if str(exp.get("id", "")).strip() == export_id_str:
+                return exp
+
+    if export_name:
+        export_name_lower = str(export_name).strip().lower()
+        for exp in exports:
+            if str(exp.get("name", "")).strip().lower() == export_name_lower:
+                return exp
+
+    return None
+
+
+# =========================
+# EXTRACTION
+# =========================
+def extract_cron(exp, sch):
+    schedule_block = exp.get("schedule", {})
+    if not isinstance(schedule_block, dict):
+        schedule_block = {}
+
+    return first(
+        sch.get("cron") if isinstance(sch, dict) else "",
+        exp.get("cron"),
+        exp.get("schedule_cron"),
+        schedule_block.get("cron")
+    )
+
+
+def extract_cron_timezone(exp, sch):
+    schedule_block = exp.get("schedule", {})
+    if not isinstance(schedule_block, dict):
+        schedule_block = {}
+
+    return first(
+        sch.get("cron_timezone") if isinstance(sch, dict) else "",
+        sch.get("timezone") if isinstance(sch, dict) else "",
+        exp.get("cron_timezone"),
+        exp.get("timezone"),
+        exp.get("time_zone"),
+        schedule_block.get("cron_timezone"),
+        schedule_block.get("timezone")
+    )
+
+
+def extract_fields_json(exp):
+    export_fields = exp.get("export_fields", [])
+    if not isinstance(export_fields, list):
+        export_fields = []
+    return dumps_safe(export_fields)
+
+
+def extract_export_selector(exp):
+    return first(
+        exp.get("export_selector"),
+        exp.get("selector"),
+        exp.get("select_rule"),
+        exp.get("filter"),
+        exp.get("where")
+    )
+
+
+def extract_threshold(exp):
+    return first(
+        exp.get("threshold"),
+        exp.get("load_threshold"),
+        exp.get("min_threshold"),
+        exp.get("max_threshold")
+    )
+
+
+def extract_field_triplets(exp):
+    export_fields = exp.get("export_fields", [])
+    if not isinstance(export_fields, list):
+        return []
+
+    triplets = []
+    for f in export_fields:
+        if not isinstance(f, dict):
             continue
 
-        try:
-            db_name = get_cell(matrix, row_num, 4)
-            db_id_raw = get_cell(matrix, row_num, 5)
-            export_id_raw = get_cell(matrix, row_num, 6)
+        triplets.append([
+            str(first(f.get("id"), f.get("export_field_id"), f.get("field_id"))).strip(),
+            str(f.get("field_name", "")).strip(),
+            str(f.get("export_field_name", "")).strip()
+        ])
 
+    return triplets
+
+
+def build_dynamic_headers(max_fields):
+    headers = FIXED_HEADERS[:]
+    for i in range(1, max_fields + 1):
+        headers.extend([
+            f"id_{i}",
+            f"field_name_{i}",
+            f"export_field_name_{i}"
+        ])
+    return headers
+
+
+def build_output_row(input_row, exp=None, sch=None, max_fields=0):
+    base_row = [
+        input_row["db_name"],
+        input_row["db_id"],
+        input_row["export_id"],
+        input_row["export_name"],
+        extract_cron(exp, sch),
+        first(exp.get("file_name"), exp.get("name")),
+        first(exp.get("protocol"), exp.get("type"), exp.get("method")),
+        first(exp.get("username"), exp.get("ftp_user"), exp.get("user")),
+        extract_cron_timezone(exp, sch),
+        first(exp.get("destination"), exp.get("ftp_path"), exp.get("path")),
+        first(exp.get("host"), exp.get("ftp_host"), exp.get("server")),
+        first(exp.get("password"), exp.get("ftp_password")),
+        dumps_safe(exp),
+        extract_fields_json(exp),
+        extract_export_selector(exp),
+        extract_threshold(exp)
+    ]
+
+    triplets = extract_field_triplets(exp)
+
+    flat_triplets = []
+    for triplet in triplets:
+        flat_triplets.extend(triplet)
+
+    expected_triplet_cells = max_fields * 3
+    flat_triplets += [""] * (expected_triplet_cells - len(flat_triplets))
+
+    return base_row + flat_triplets
+
+
+def build_error_row(input_row, max_fields=0):
+    base_row = [
+        input_row["db_name"],
+        input_row["db_id"],
+        input_row["export_id"],
+        input_row["export_name"],
+        "", "", "", "", "", "", "", "", "", "", "", ""
+    ]
+    return base_row + ([""] * (max_fields * 3))
+
+
+# =========================
+# MAIN
+# =========================
+def main():
+    print("📥 Leyendo filas de Update Exports...")
+    input_rows = read_sheet_rows()
+
+    if not input_rows:
+        print("⚠️ No se encontraron filas válidas.")
+        return
+
+    print(f"🔎 Filas válidas encontradas: {len(input_rows)}")
+
+    prepared_rows = []
+    status_updates = []
+    exports_cache = {}
+    max_fields = 0
+
+    for row in input_rows:
+        db_name = row["db_name"]
+        db_id_raw = row["db_id"]
+        export_id_raw = row["export_id"]
+        export_name = row["export_name"]
+        sheet_row = row["sheet_row"]
+
+        try:
             if not db_id_raw or not export_id_raw:
-                raise Exception("Faltan db_id o export_id")
+                raise Exception("db_id y export_id son requeridos")
 
             db_id = clean_int(db_id_raw)
             export_id = clean_int(export_id_raw)
 
-            # =========================
-            # DELETE
-            # =========================
-            if action == "DELETE":
-                ok, msg = delete_export(db_id, export_id)
-
-                write_cell(row_num, 2, "SUCCESS" if ok else "ERROR")
-                write_cell(row_num, 3, msg[:50000])
-
-                if ok:
-                    print(f"🗑️ DELETED | row {row_num} | {db_name} | export_id {export_id}")
-                else:
-                    print(f"❌ DELETE ERROR | row {row_num} | {db_name} | {msg}")
-                continue
-
-            # =========================
-            # UPDATE
-            # =========================
-            row = {
-                "db_name": db_name,
-                "db_id": db_id_raw,
-                "export_id": export_id_raw,
-                "export_name": get_cell(matrix, row_num, 7),
-                "cron": get_cell(matrix, row_num, 8),
-                "file_name": get_cell(matrix, row_num, 9),
-                "protocol": get_cell(matrix, row_num, 10),
-                "username": get_cell(matrix, row_num, 11),
-                "cron_timezone": get_cell(matrix, row_num, 12),
-                "destination": get_cell(matrix, row_num, 13),
-                "host": get_cell(matrix, row_num, 14),
-                "password": get_cell(matrix, row_num, 15),
-                "raw_json": get_cell(matrix, row_num, 16),
-                "field_json": get_cell(matrix, row_num, 17),
-                "export_selector": get_cell(matrix, row_num, 18),
-                "threshold": get_cell(matrix, row_num, 19),
-            }
-
-            raw_payload = json.loads(row["raw_json"]) if row["raw_json"].strip() else {}
-            if not isinstance(raw_payload, dict):
-                raise Exception("raw_export_json no es un objeto JSON válido")
-
-            current_cron = first(raw_payload.get("cron"), "")
-            current_paused = first(raw_payload.get("paused"), "0")
-
-            cron_override = str(first(row["cron"], "")).strip()
-            cron_changed = values_differ(cron_override, current_cron)
-
-            row_values = {c: get_cell(matrix, row_num, c) for c in range(1, 501)}
-            groups = parse_horizontal_fields(row_values)
-
-            non_schedule_override_present = any([
-                row["file_name"].strip(),
-                row["destination"].strip(),
-                row["protocol"].strip(),
-                row["host"].strip(),
-                row["username"].strip(),
-                row["password"].strip(),
-                row["export_selector"].strip(),
-                row["threshold"].strip(),
-                len(groups) > 0
-            ])
-
-            if not cron_changed and not non_schedule_override_present:
-                write_cell(row_num, 2, "SKIPPED")
-                write_cell(row_num, 3, "No hay cambios")
-                print(f"⏭️ SKIPPED row {row_num} | no hay cambios")
-                continue
-
-            export_ok = True
-            export_msg = "SKIPPED"
-
-            if non_schedule_override_present or cron_changed:
-                payload = build_payload_from_raw(row["raw_json"])
-                payload = apply_overrides(payload, row)
-                payload = replace_export_fields(payload, groups)
-
-                print("=== EXPORT UPDATE ===")
-                print(json.dumps(payload, indent=2, ensure_ascii=False)[:20000])
-
-                export_ok, export_msg = update_export(
-                    db_id,
-                    export_id,
-                    payload
-                )
-
-            schedule_ok = True
-            schedule_msg = "SKIPPED"
-
-            if cron_changed:
-                schedule_payload = build_schedule_payload_from_cron(
-                    cron_value=row["cron"],
-                    cron_timezone_value=row["cron_timezone"],
-                    current_paused=current_paused
-                )
-
-                print("=== SCHEDULE UPDATE ===")
-                print(json.dumps(schedule_payload, indent=2, ensure_ascii=False))
-
-                schedule_ok, schedule_msg = update_export_schedule(
-                    db_id,
-                    export_id,
-                    schedule_payload
-                )
-
-            final_ok = export_ok and schedule_ok
-
-            combined_msg = (
-                f"EXPORT={export_msg[:4000]} | "
-                f"SCHEDULE={schedule_msg[:4000]}"
-            )
-
-            write_cell(row_num, 2, "SUCCESS" if final_ok else "ERROR")
-            write_cell(row_num, 3, combined_msg[:50000])
-
-            if final_ok:
-                print(f"✅ UPDATED row {row_num}")
+            if db_id in exports_cache:
+                exports = exports_cache[db_id]
             else:
-                print(f"❌ row {row_num} | {combined_msg}")
+                print(f"🚀 Consultando exports | DB {db_id}")
+                exports = get_exports(db_id)
+                exports_cache[db_id] = exports
+
+            exp = find_export(exports, export_id=export_id, export_name=export_name)
+
+            if not exp:
+                raise Exception("Export not found")
+
+            sch = get_schedule_optional(db_id, export_id)
+            field_count = len(extract_field_triplets(exp))
+            max_fields = max(max_fields, field_count)
+
+            prepared_rows.append({
+                "type": "success",
+                "input_row": row,
+                "exp": exp,
+                "sch": sch
+            })
+
+            status_updates.append({
+                "sheet_row": sheet_row,
+                "status_message": f"SUCCESS | {field_count} field(s)",
+                "error_message": ""
+            })
+
+            print(f"✅ OK | {db_name} | export_id {export_id} | fields={field_count}")
 
         except Exception as e:
-            write_cell(row_num, 2, "ERROR")
-            write_cell(row_num, 3, str(e))
-            print(f"❌ row {row_num} | {str(e)}")
+            prepared_rows.append({
+                "type": "error",
+                "input_row": row
+            })
+
+            status_updates.append({
+                "sheet_row": sheet_row,
+                "status_message": "ERROR",
+                "error_message": str(e)
+            })
+
+            print(f"❌ ERROR | {db_name} | {str(e)}")
+
+    headers = build_dynamic_headers(max_fields)
+
+    output_rows = []
+    for item in prepared_rows:
+        if item["type"] == "success":
+            output_rows.append(
+                build_output_row(
+                    item["input_row"],
+                    exp=item["exp"],
+                    sch=item["sch"],
+                    max_fields=max_fields
+                )
+            )
+        else:
+            output_rows.append(
+                build_error_row(
+                    item["input_row"],
+                    max_fields=max_fields
+                )
+            )
+
+    print("🧹 Limpiando salida anterior desde columna D...")
+    clear_output()
+
+    print("✍️ Escribiendo resultados por filas desde D...")
+    write_output_table(headers, output_rows)
+
+    print("✍️ Actualizando status_message y error_message...")
+    update_status_columns(status_updates)
+
+    print("✅ Proceso completado")
+    print(f"   - Filas procesadas: {len(input_rows)}")
+    print(f"   - Filas escritas: {len(output_rows)}")
+    print(f"   - Máximo de fields encontrados en un export: {max_fields}")
 
 
 if __name__ == "__main__":
