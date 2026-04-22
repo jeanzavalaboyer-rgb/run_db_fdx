@@ -243,27 +243,41 @@ def parse_horizontal_fields(row_values):
     Desde columna T = 20 en adelante:
     grupos de 3 columnas:
     id / field_name / export_field_name
+
+    Regla:
+    - si hay un bloque vacío en el medio, NO se corta la lectura
+    - solo se ignora ese bloque
+    - así no se pierden los campos posteriores
     """
     groups = []
     col = 20
+    empty_streak = 0
+    max_col = 500
 
-    while col <= 500:
-        field_id = row_values.get(col, "")
-        field_name = row_values.get(col + 1, "")
-        export_field_name = row_values.get(col + 2, "")
+    while col <= max_col:
+        field_id = str(row_values.get(col, "")).strip()
+        field_name = str(row_values.get(col + 1, "")).strip()
+        export_field_name = str(row_values.get(col + 2, "")).strip()
 
-        if (
-            str(field_id).strip() == "" and
-            str(field_name).strip() == "" and
-            str(export_field_name).strip() == ""
-        ):
+        is_empty_group = (
+            field_id == "" and
+            field_name == "" and
+            export_field_name == ""
+        )
+
+        if is_empty_group:
+            empty_streak += 1
+        else:
+            empty_streak = 0
+            groups.append({
+                "id": field_id,
+                "field_name": field_name,
+                "export_field_name": export_field_name
+            })
+
+        # corta solo si ya hay varios bloques vacíos seguidos al final
+        if empty_streak >= 5:
             break
-
-        groups.append({
-            "id": str(field_id).strip(),
-            "field_name": str(field_name).strip(),
-            "export_field_name": str(export_field_name).strip()
-        })
 
         col += 3
 
@@ -330,13 +344,14 @@ def apply_overrides(payload, row):
     cron_timezone_value = str(first(row["cron_timezone"], "")).strip()
 
     if cron_value == "":
-        payload["cron"] = "null"
-        payload["cron_timezone"] = ""
+        payload["cron"] = None
+        payload["cron_timezone"] = None if cron_timezone_value == "" else cron_timezone_value
         payload["paused"] = 1
     else:
         payload["cron"] = cron_value
         if cron_timezone_value != "":
             payload["cron_timezone"] = cron_timezone_value
+        payload["paused"] = 0
 
     return payload
 
@@ -366,12 +381,22 @@ def replace_export_fields(payload, groups):
     idx = 1
 
     for g in groups:
-        fid = g["id"]
-        item = existing_by_id.get(fid, {"id": fid})
+        fid = str(g.get("id", "")).strip()
+        field_name = str(g.get("field_name", "")).strip()
+        export_field_name = str(g.get("export_field_name", "")).strip()
 
+        # ignora bloques totalmente vacíos
+        if fid == "" and field_name == "" and export_field_name == "":
+            continue
+
+        # para mantener o actualizar un field existente, debe tener id
+        if fid == "":
+            continue
+
+        item = existing_by_id.get(fid, {"id": fid})
         item["id"] = fid
-        item["field_name"] = g["field_name"]
-        item["export_field_name"] = g["export_field_name"]
+        item["field_name"] = field_name
+        item["export_field_name"] = export_field_name
 
         final[f"field{idx}"] = item
         idx += 1
@@ -388,11 +413,15 @@ def build_schedule_payload_from_cron(cron_value, cron_timezone_value="", current
     cron_timezone_str = str(first(cron_timezone_value, "")).strip()
 
     if not cron_str:
-        return {
+        payload = {
             "cron": None,
-            "cron_timezone": None,
             "paused": 1
         }
+        if cron_timezone_str != "":
+            payload["cron_timezone"] = cron_timezone_str
+        else:
+            payload["cron_timezone"] = None
+        return payload
 
     parts = cron_str.split()
     if len(parts) != 5:
@@ -423,7 +452,7 @@ def build_schedule_payload_from_cron(cron_value, cron_timezone_value="", current
         "day": str(day_value),
         "hour": str(hour),
         "minute": str(minute),
-        "paused": int(str(first(current_paused, "0")).strip() or "0")
+        "paused": 0
     }
 
     if cron_timezone_str != "":
