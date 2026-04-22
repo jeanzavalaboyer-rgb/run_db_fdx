@@ -1,4 +1,4 @@
-name: Update Imports
+name: Update Imports details bulk
 
 on:
   workflow_dispatch:
