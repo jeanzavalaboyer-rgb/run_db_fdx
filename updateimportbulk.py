@@ -166,8 +166,19 @@ def parse_raw(raw_text):
     raw_json["import_info"] = raw_json.get("import_info") or {}
     raw_json["tags"] = raw_json.get("tags") or {"platform": "Not Applicable"}
     raw_json["file_map"] = raw_json.get("file_map") or {}
+
+    if not isinstance(raw_json["file_map"], dict):
+        raw_json["file_map"] = {}
+
     raw_json["file_map"]["maps"] = raw_json["file_map"].get("maps") or {}
+
+    if not isinstance(raw_json["file_map"]["maps"], (dict, list)):
+        raw_json["file_map"]["maps"] = {}
+
     raw_json["file_map"]["ignore_join"] = raw_json["file_map"].get("ignore_join") or []
+
+    if not isinstance(raw_json["file_map"]["ignore_join"], list):
+        raw_json["file_map"]["ignore_join"] = []
 
     return raw_json
 
@@ -285,9 +296,6 @@ def unique_preserve_order(items):
 
 
 def extract_first_array_only(payload):
-    """
-    Solo primer [] del endpoint parsed
-    """
     if isinstance(payload, list):
         if payload and isinstance(payload[0], list):
             return payload[0]
@@ -410,9 +418,18 @@ def extract_sheet_maps(sheet_row, max_consecutive_empty=10):
 def normalize_raw_maps_to_plain(raw_maps):
     normalized = {}
 
-    for raw_key, mapped_field in (raw_maps or {}).items():
-        plain_key = hex_to_text_if_possible(raw_key)
-        normalized[clean(plain_key)] = clean(mapped_field)
+    if isinstance(raw_maps, dict):
+        for raw_key, mapped_field in raw_maps.items():
+            plain_key = hex_to_text_if_possible(raw_key)
+            normalized[clean(plain_key)] = clean(mapped_field)
+
+    elif isinstance(raw_maps, list):
+        # Some Feedonomics imports return file_map.maps as a list.
+        # We skip map comparison to avoid blocking threshold updates.
+        return {}
+
+    else:
+        return {}
 
     return normalized
 
@@ -449,6 +466,11 @@ def build_merged_plain_maps(sheet_row, raw_json):
 
 
 def detect_file_map_changes(sheet_row, raw_json):
+    raw_maps = raw_json.get("file_map", {}).get("maps", {}) or {}
+
+    if isinstance(raw_maps, list):
+        return False
+
     changed_sheet_maps = extract_changed_sheet_maps(sheet_row, raw_json)
     return len(changed_sheet_maps) > 0
 
@@ -503,6 +525,11 @@ def build_threshold_payload(sheet_row, raw_json):
 
 def build_file_map_payload(sheet_row, raw_json):
     raw_file_map = raw_json.get("file_map", {}) or {}
+
+    raw_maps = raw_file_map.get("maps", {}) or {}
+    if isinstance(raw_maps, list):
+        return None
+
     changed_sheet_maps = extract_changed_sheet_maps(sheet_row, raw_json)
 
     if not changed_sheet_maps:
@@ -797,10 +824,8 @@ def main():
         print("No rows found.")
         return
 
-    # NUEVA FUNCIÓN
     process_get_mapped_fields(service, headers, rows)
 
-    # FLUJO ORIGINAL
     for idx, row in enumerate(rows, start=2):
         row_data = row_to_dict(headers, row)
         action = clean(row_data.get("Action")).upper()
@@ -832,7 +857,12 @@ def main():
 
             main_changes = detect_main_changes(row_data, raw_json)
             threshold_changes = detect_threshold_changes(row_data, raw_json)
-            file_map_changes = detect_file_map_changes(row_data, raw_json)
+
+            try:
+                file_map_changes = detect_file_map_changes(row_data, raw_json)
+            except Exception as e:
+                file_map_changes = False
+                print(f"⚠️ File map check skipped row {idx}: {e}")
 
             if not main_changes and not threshold_changes and not file_map_changes:
                 write_status(service, idx, "SKIPPED", "No changes detected")
@@ -867,28 +897,28 @@ def main():
                 payload_map = build_file_map_payload(row_data, raw_json)
 
                 if not payload_map:
-                    raise Exception("File map payload could not be built")
+                    print(f"⚠️ File map update skipped row {idx}: payload could not be built")
+                else:
+                    print(f"🔎 File map payload row {idx}: {payload_map}")
 
-                print(f"🔎 File map payload row {idx}: {payload_map}")
+                    try:
+                        resp = update_file_map(db_id, import_id, payload_map)
 
-                try:
-                    resp = update_file_map(db_id, import_id, payload_map)
+                        if resp.status_code not in [200, 201]:
+                            data = safe_json(resp)
+                            raise Exception(
+                                f"File map update failed | HTTP {resp.status_code} | {data}"
+                            )
 
-                    if resp.status_code not in [200, 201]:
-                        data = safe_json(resp)
-                        raise Exception(
-                            f"File map update failed | HTTP {resp.status_code} | {data}"
+                    except ReadTimeout:
+                        write_status(
+                            service,
+                            idx,
+                            "TIMEOUT - VERIFY",
+                            "File map request timed out after sending. Please verify in Feedonomics if the update was applied."
                         )
-
-                except ReadTimeout:
-                    write_status(
-                        service,
-                        idx,
-                        "TIMEOUT - VERIFY",
-                        "File map request timed out after sending. Please verify in Feedonomics if the update was applied."
-                    )
-                    print(f"⏱️ TIMEOUT row {idx} | file_map update may have been applied")
-                    continue
+                        print(f"⏱️ TIMEOUT row {idx} | file_map update may have been applied")
+                        continue
 
             status_msg = get_status_message(
                 main_changes,
