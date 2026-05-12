@@ -12,11 +12,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # CONFIG
 # =========================
 api_key = os.environ["FEEDONOMICS_API_KEY"]
-
-service_path = os.getenv(
-    "FEEDONOMICS_SERVICE_PATH",
-    "https://meta.feedonomics.com/api.php"
-)
+service_path = os.getenv("FEEDONOMICS_SERVICE_PATH", "https://meta.feedonomics.com/api.php")
 
 headers = {
     "Authorization": f"Bearer {api_key}",
@@ -24,20 +20,9 @@ headers = {
     "Content-Type": "application/json"
 }
 
-SERVICE_ACCOUNT_FILE = os.getenv(
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "merchantapi-fdx.json"
-)
-
-SPREADSHEET_ID = os.getenv(
-    "SPREADSHEET_ID",
-    "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw"
-)
-
-SHEET_NAME = os.getenv(
-    "SHEET_NAME",
-    "Update Transformers"
-)
+SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "merchantapi-fdx.json")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "165va_Om_aFEmHg7h_zOUKpafsxEdB6MKvAycu6w16yw")
+SHEET_NAME = os.getenv("SHEET_NAME", "Update Transformers")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -50,12 +35,10 @@ def get_sheets_service():
         SERVICE_ACCOUNT_FILE,
         scopes=SCOPES
     )
-
     return build("sheets", "v4", credentials=creds)
 
 
 def read_sheet():
-
     service = get_sheets_service()
 
     result = service.spreadsheets().values().get(
@@ -66,16 +49,9 @@ def read_sheet():
     values = result.get("values", [])
 
     if not values:
-        raise Exception(
-            f"No se encontraron datos en la tab '{SHEET_NAME}'"
-        )
+        raise Exception(f"No se encontraron datos en la tab '{SHEET_NAME}'")
 
-    # NORMALIZAR HEADERS
-    headers_row = [
-        str(h).strip().lower()
-        for h in values[0]
-    ]
-
+    headers_row = [str(h).strip().lower() for h in values[0]]
     data_rows = values[1:]
 
     normalized_rows = []
@@ -84,12 +60,9 @@ def read_sheet():
         row = row + [""] * (len(headers_row) - len(row))
         normalized_rows.append(row[:len(headers_row)])
 
-    df = pd.DataFrame(
-        normalized_rows,
-        columns=headers_row
-    )
+    df = pd.DataFrame(normalized_rows, columns=headers_row)
 
-    # REMOVER COLUMNAS DUPLICADAS
+    # Evita problemas si por algún motivo hay headers duplicados
     df = df.loc[:, ~df.columns.duplicated()]
 
     df = (
@@ -105,8 +78,6 @@ def read_sheet():
 # HELPERS
 # =========================
 def clean_int(value):
-
-    # SI VIENE COMO SERIES
     if hasattr(value, "iloc"):
         value = value.iloc[0]
 
@@ -119,7 +90,6 @@ def clean_int(value):
 
 
 def normalize_bool(value):
-
     if hasattr(value, "iloc"):
         value = value.iloc[0]
 
@@ -131,13 +101,10 @@ def normalize_bool(value):
     if value in ["false", "0", "no", "n"]:
         return False
 
-    raise ValueError(
-        f"Valor inválido para enabled: {value}"
-    )
+    raise ValueError(f"Valor inválido para enabled: {value}")
 
 
 def normalize_selector(value):
-
     if hasattr(value, "iloc"):
         value = value.iloc[0]
 
@@ -158,7 +125,6 @@ def normalize_selector(value):
 
 
 def normalize_transformer(value):
-
     if hasattr(value, "iloc"):
         value = value.iloc[0]
 
@@ -181,39 +147,56 @@ def normalize_transformer(value):
 
 
 def normalize_exports_value(exports_value):
-
     if hasattr(exports_value, "iloc"):
         exports_value = exports_value.iloc[0]
 
     value = str(exports_value).strip()
 
+    # Vacío = all exports
     if not value:
         return {
             "export_ids": ["0"],
             "all_exports": True
         }
 
+    # 0 = all exports
     if value in ["0", "0.0"]:
         return {
             "export_ids": ["0"],
             "all_exports": True
         }
 
-    try:
+    # Soporta input separado por coma:
+    # 652463,6524,8888
+    if "," in value:
+        export_ids = []
 
+        for item in value.split(","):
+            item = item.strip()
+
+            if not item:
+                continue
+
+            try:
+                item = str(int(float(item)))
+            except Exception:
+                item = str(item)
+
+            export_ids.append(item)
+
+        return {
+            "export_ids": export_ids,
+            "all_exports": False
+        }
+
+    # Soporta JSON:
+    # {"export_ids":["652463","6524"],"all_exports":false}
+    try:
         parsed = json.loads(value)
 
         if isinstance(parsed, dict):
-
-            raw_export_ids = parsed.get(
-                "export_ids",
-                ["0"]
-            )
-
-            raw_all_exports = parsed.get(
-                "all_exports",
-                False
-            )
+            raw_export_ids = parsed.get("export_ids", ["0"])
+            raw_all_exports = parsed.get("all_exports", False)
 
             if not isinstance(raw_export_ids, list):
                 raw_export_ids = [raw_export_ids]
@@ -221,7 +204,6 @@ def normalize_exports_value(exports_value):
             normalized_ids = []
 
             for item in raw_export_ids:
-
                 item_str = str(item).strip()
 
                 if item_str == "":
@@ -241,22 +223,31 @@ def normalize_exports_value(exports_value):
             }
 
         if isinstance(parsed, list):
+            export_ids = []
+
+            for item in parsed:
+                item_str = str(item).strip()
+
+                if not item_str:
+                    continue
+
+                try:
+                    item_str = str(int(float(item_str)))
+                except Exception:
+                    pass
+
+                export_ids.append(item_str)
 
             return {
-                "export_ids": [
-                    str(int(float(x)))
-                    if str(x).replace(".", "", 1).isdigit()
-                    else str(x)
-                    for x in parsed
-                ],
+                "export_ids": export_ids or ["0"],
                 "all_exports": False
             }
 
     except Exception:
         pass
 
+    # Single export id
     try:
-
         export_id = str(int(float(value)))
 
         return {
@@ -265,7 +256,6 @@ def normalize_exports_value(exports_value):
         }
 
     except Exception:
-
         return {
             "export_ids": ["0"],
             "all_exports": True
@@ -273,10 +263,7 @@ def normalize_exports_value(exports_value):
 
 
 def parse_export_ids(exports_value):
-
-    exports_obj = normalize_exports_value(
-        exports_value
-    )
+    exports_obj = normalize_exports_value(exports_value)
 
     if exports_obj["all_exports"] is True:
         return ["0"]
@@ -285,64 +272,38 @@ def parse_export_ids(exports_value):
 
 
 def get_selector_value(row):
+    new_selector = str(row.get("new selector", "")).strip()
+    selector = str(row.get("selector", "")).strip()
 
-    return row.get(
-        "new selector",
-        row.get("selector", "")
-    )
+    return new_selector if new_selector else selector
 
 
 def get_transformer_value(row):
+    new_transformer = str(row.get("new transformer", "")).strip()
+    transformer = str(row.get("transformer", "")).strip()
 
-    return row.get(
-        "new transformer",
-        row.get("transformer", "")
-    )
+    return new_transformer if new_transformer else transformer
 
 
 # =========================
 # UPDATE
 # =========================
 def update_transformer(row):
-
     db_id = clean_int(row["db_id"])
-
-    transformer_id = clean_int(
-        row["transformer_id"]
-    )
-
-    field_name = str(
-        row["field_name"]
-    ).strip()
+    transformer_id = clean_int(row["transformer_id"])
+    field_name = str(row["field_name"]).strip()
 
     if not field_name:
         raise ValueError("field_name vacío")
 
-    selector = normalize_selector(
-        get_selector_value(row)
-    )
+    selector = normalize_selector(get_selector_value(row))
+    transformer = normalize_transformer(get_transformer_value(row))
+    enabled = normalize_bool(row["enabled"])
 
-    transformer = normalize_transformer(
-        get_transformer_value(row)
-    )
+    exports_obj = normalize_exports_value(row["exports"])
+    export_ids = parse_export_ids(row["exports"])
 
-    enabled = normalize_bool(
-        row["enabled"]
-    )
-
-    exports_obj = normalize_exports_value(
-        row["exports"]
-    )
-
-    export_ids = parse_export_ids(
-        row["exports"]
-    )
-
-    url = (
-        f"{service_path}/dbs/"
-        f"{db_id}/transformers/"
-        f"{transformer_id}"
-    )
+    url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
 
     payload = {
         "enabled": enabled,
@@ -362,58 +323,31 @@ def update_transformer(row):
     )
 
     try:
-        response_text = json.dumps(
-            resp.json(),
-            ensure_ascii=False
-        )
+        response_text = json.dumps(resp.json(), ensure_ascii=False)
     except Exception:
         response_text = resp.text
 
-    return (
-        resp.status_code,
-        response_text,
-        payload
-    )
+    return resp.status_code, response_text, payload
 
 
 # =========================
 # CREATE
 # =========================
 def create_transformer(row):
-
     db_id = clean_int(row["db_id"])
-
-    field_name = str(
-        row["field_name"]
-    ).strip()
+    field_name = str(row["field_name"]).strip()
 
     if not field_name:
         raise ValueError("field_name vacío")
 
-    selector = normalize_selector(
-        get_selector_value(row)
-    )
+    selector = normalize_selector(get_selector_value(row))
+    transformer = normalize_transformer(get_transformer_value(row))
+    enabled = normalize_bool(row["enabled"])
 
-    transformer = normalize_transformer(
-        get_transformer_value(row)
-    )
+    exports_obj = normalize_exports_value(row["exports"])
+    export_ids = parse_export_ids(row["exports"])
 
-    enabled = normalize_bool(
-        row["enabled"]
-    )
-
-    exports_obj = normalize_exports_value(
-        row["exports"]
-    )
-
-    export_ids = parse_export_ids(
-        row["exports"]
-    )
-
-    url = (
-        f"{service_path}/dbs/"
-        f"{db_id}/transformers"
-    )
+    url = f"{service_path}/dbs/{db_id}/transformers"
 
     payload = {
         "enabled": enabled,
@@ -433,36 +367,21 @@ def create_transformer(row):
     )
 
     try:
-        response_text = json.dumps(
-            resp.json(),
-            ensure_ascii=False
-        )
+        response_text = json.dumps(resp.json(), ensure_ascii=False)
     except Exception:
         response_text = resp.text
 
-    return (
-        resp.status_code,
-        response_text,
-        payload
-    )
+    return resp.status_code, response_text, payload
 
 
 # =========================
 # DELETE
 # =========================
 def delete_transformer(row):
-
     db_id = clean_int(row["db_id"])
+    transformer_id = clean_int(row["transformer_id"])
 
-    transformer_id = clean_int(
-        row["transformer_id"]
-    )
-
-    url = (
-        f"{service_path}/dbs/"
-        f"{db_id}/transformers/"
-        f"{transformer_id}"
-    )
+    url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
 
     resp = requests.delete(
         url,
@@ -472,10 +391,7 @@ def delete_transformer(row):
     )
 
     try:
-        response_text = json.dumps(
-            resp.json(),
-            ensure_ascii=False
-        )
+        response_text = json.dumps(resp.json(), ensure_ascii=False)
     except Exception:
         response_text = resp.text
 
@@ -484,26 +400,18 @@ def delete_transformer(row):
         "transformer_id": transformer_id
     }
 
-    return (
-        resp.status_code,
-        response_text,
-        payload
-    )
+    return resp.status_code, response_text, payload
 
 
 # =========================
 # WRITE STATUS
 # =========================
 def write_status(results):
-
     service = get_sheets_service()
 
-    values = [
-        ["update_status", "error_message"]
-    ]
+    values = [["update_status", "error_message"]]
 
     for r in results:
-
         values.append([
             r["status"],
             r["error"]
@@ -521,7 +429,6 @@ def write_status(results):
 # MAIN
 # =========================
 def main():
-
     df = read_sheet()
 
     required_columns = [
@@ -537,161 +444,76 @@ def main():
     ]
 
     missing_cols = [
-        col
-        for col in required_columns
+        col for col in required_columns
         if col not in df.columns
     ]
 
     if missing_cols:
-        raise Exception(
-            f"Faltan columnas requeridas: {missing_cols}"
-        )
+        raise Exception(f"Faltan columnas requeridas: {missing_cols}")
 
     results = []
 
     for idx, row in df.iterrows():
-
         sheet_row = idx + 2
 
         try:
+            action = str(row.get("action", "")).strip().lower()
 
-            action = str(
-                row.get("action", "")
-            ).strip().lower()
-
-            if action not in [
-                "update",
-                "new",
-                "delete"
-            ]:
-
+            if action not in ["update", "new", "delete"]:
                 status = "SKIPPED"
-
-                error = (
-                    f"Fila omitida: "
-                    f"action '{action}' "
-                    f"no soportado"
-                )
+                error = f"Fila omitida: action '{action}' no soportado"
 
                 print(
-                    f"⏭️ Fila {sheet_row} omitida "
-                    f"| action: "
-                    f"{row.get('action', '')}"
+                    f"⏭️ Fila {sheet_row} omitida | "
+                    f"action: {row.get('action', '')}"
                 )
 
             else:
-
-                db_id_raw = str(
-                    row.get("db_id", "")
-                ).strip()
-
-                transformer_id_raw = str(
-                    row.get("transformer_id", "")
-                ).strip()
+                db_id_raw = str(row.get("db_id", "")).strip()
+                transformer_id_raw = str(row.get("transformer_id", "")).strip()
 
                 if not db_id_raw:
-
                     status = "ERROR"
                     error = "db_id vacío"
+                    print(f"❌ Fila {sheet_row} ERROR: {error}")
 
-                    print(
-                        f"❌ Fila {sheet_row} ERROR: "
-                        f"{error}"
-                    )
-
-                elif (
-                    action in ["update", "delete"]
-                    and not transformer_id_raw
-                ):
-
+                elif action in ["update", "delete"] and not transformer_id_raw:
                     status = "ERROR"
-
-                    error = (
-                        "transformer_id vacío "
-                        "para action Update/Delete"
-                    )
-
-                    print(
-                        f"❌ Fila {sheet_row} ERROR: "
-                        f"{error}"
-                    )
+                    error = "transformer_id vacío para action Update/Delete"
+                    print(f"❌ Fila {sheet_row} ERROR: {error}")
 
                 else:
-
-                    print(
-                        f"Fila {sheet_row} | "
-                        f"action: {action.upper()}"
-                    )
+                    print(f"Fila {sheet_row} | action: {action.upper()}")
 
                     if action == "update":
-
-                        (
-                            status_code,
-                            response,
-                            payload
-                        ) = update_transformer(row)
+                        status_code, response, payload = update_transformer(row)
 
                     elif action == "new":
-
-                        (
-                            status_code,
-                            response,
-                            payload
-                        ) = create_transformer(row)
+                        status_code, response, payload = create_transformer(row)
 
                     elif action == "delete":
-
-                        (
-                            status_code,
-                            response,
-                            payload
-                        ) = delete_transformer(row)
+                        status_code, response, payload = delete_transformer(row)
 
                     if status_code in [200, 201, 204]:
-
                         status = "SUCCESS"
                         error = ""
-
-                        print(
-                            f"✅ Fila {sheet_row} OK"
-                        )
-
+                        print(f"✅ Fila {sheet_row} OK")
                     else:
-
                         status = "ERROR"
                         error = response
-
-                        print(
-                            f"❌ Fila {sheet_row} "
-                            f"ERROR {status_code}"
-                        )
+                        print(f"❌ Fila {sheet_row} ERROR {status_code}")
 
                     print("Payload enviado:")
-
-                    print(
-                        json.dumps(
-                            payload,
-                            indent=2,
-                            ensure_ascii=False
-                        )
-                    )
-
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
                     print("Respuesta:")
-
                     print(response)
-
                     print("-" * 80)
 
         except Exception as e:
-
             status = "ERROR"
             error = str(e)
 
-            print(
-                f"❌ Fila {sheet_row} EXCEPTION: "
-                f"{error}"
-            )
-
+            print(f"❌ Fila {sheet_row} EXCEPTION: {error}")
             print("-" * 80)
 
         results.append({
@@ -702,7 +524,6 @@ def main():
     write_status(results)
 
     print("\n✅ Resultados escritos en columnas B y C")
-
     print("B = update_status")
     print("C = error_message")
 
