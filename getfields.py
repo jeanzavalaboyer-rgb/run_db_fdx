@@ -97,6 +97,7 @@ def pad_rows(values):
 # =========================
 def read_global_databases(spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
     values = read_sheet_raw(spreadsheet_id, sheet_name, "A:Z")
+
     if not values:
         raise Exception(f"La hoja '{sheet_name}' está vacía.")
 
@@ -107,11 +108,12 @@ def read_global_databases(spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
 
     df = pd.DataFrame(data_rows, columns=headers_row)
 
-    # eliminar columnas duplicadas por si acaso
     df = df.loc[:, ~df.columns.duplicated()]
 
     required_cols = {"DB_NAME", "DB_ID"}
+
     missing = required_cols - set(df.columns)
+
     if missing:
         raise Exception(f"Faltan columnas requeridas en '{sheet_name}': {missing}")
 
@@ -133,18 +135,23 @@ def read_global_databases(spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
 # =========================
 def read_update_transformers(spreadsheet_id: str, sheet_name: str) -> pd.DataFrame:
     """
-    Lee A:C y fuerza estructura:
-    A = DB_NAME
-    B = DB_ID
-    C = FIELD_NAME
+    NUEVA ESTRUCTURA:
+
+    A = action
+    B = update_status
+    C = error_message
+    D = DB_NAME
+    E = DB_ID
+    F = FIELD_NAME
     """
-    values = read_sheet_raw(spreadsheet_id, sheet_name, "A:C")
+
+    values = read_sheet_raw(spreadsheet_id, sheet_name, "D:F")
+
     if not values:
         raise Exception(f"La hoja '{sheet_name}' está vacía.")
 
     values = pad_rows(values)
 
-    # ignoramos headers originales y forzamos estructura por posición
     data_rows = values[1:] if len(values) > 1 else []
 
     df = pd.DataFrame(data_rows, columns=["DB_NAME", "DB_ID", "FIELD_NAME"])
@@ -161,7 +168,13 @@ def read_update_transformers(spreadsheet_id: str, sheet_name: str) -> pd.DataFra
 # =========================
 def get_db_fields(db_id: int):
     url = f"{service_path}/dbs/{db_id}/db_fields"
-    resp = requests.get(url, headers=headers, verify=False, timeout=60)
+
+    resp = requests.get(
+        url,
+        headers=headers,
+        verify=False,
+        timeout=60
+    )
 
     if resp.status_code != 200:
         return None, (resp.status_code, resp.text)
@@ -182,6 +195,7 @@ def get_db_fields(db_id: int):
 # =========================
 def clear_range(spreadsheet_id: str, range_a1: str):
     service = get_sheets_service()
+
     service.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id,
         range=range_a1
@@ -219,15 +233,20 @@ def write_table(spreadsheet_id: str, sheet_name: str, start_cell: str, headers_l
 # =========================
 def main():
     print("📥 Leyendo Global Databases...")
-    df_global_db = read_global_databases(SPREADSHEET_ID, DATABASES_SHEET)
+    df_global_db = read_global_databases(
+        SPREADSHEET_ID,
+        DATABASES_SHEET
+    )
 
     print("📥 Leyendo Update Transformers...")
-    df_update = read_update_transformers(SPREADSHEET_ID, TARGET_SHEET)
+    df_update = read_update_transformers(
+        SPREADSHEET_ID,
+        TARGET_SHEET
+    )
 
     # -------------------------
     # MAP DB_NAME -> DB_ID
     # -------------------------
-    # Si hubiera db_name duplicado con distinto db_id, toma el primero
     db_map = (
         df_global_db
         .drop_duplicates(subset=["DB_NAME"], keep="first")
@@ -235,20 +254,21 @@ def main():
         .to_dict()
     )
 
-    # llenar DB_ID en base a DB_NAME (col A)
+    # llenar DB_ID en base a DB_NAME
     df_update["DB_ID"] = df_update["DB_NAME"].map(db_map).fillna("")
 
-    print("✍️ Actualizando columna B con DB_ID...")
+    print("✍️ Actualizando columna E con DB_ID...")
+
     write_single_column(
         spreadsheet_id=SPREADSHEET_ID,
         sheet_name=TARGET_SHEET,
-        start_col="B",
+        start_col="E",
         header="db_id",
         values_list=df_update["DB_ID"].tolist()
     )
 
     # -------------------------
-    # DBs seleccionados en Update Transformers
+    # DBs seleccionados
     # -------------------------
     selected_dbs = (
         df_update[["DB_NAME", "DB_ID"]]
@@ -261,16 +281,15 @@ def main():
         (selected_dbs["DB_ID"].astype(str).str.strip() != "")
     ].copy()
 
-    print(f"🔎 DBs seleccionados en Update Transformers: {len(selected_dbs)}")
+    print(f"🔎 DBs seleccionados: {len(selected_dbs)}")
 
     # -------------------------
-    # Traer field_name vía API
+    # API CALLS
     # -------------------------
     unique_rows = []
     seen = set()
     errors = []
 
-    # cache para no repetir llamadas al mismo db_id
     db_fields_cache = {}
 
     for _, row in selected_dbs.iterrows():
@@ -279,6 +298,7 @@ def main():
 
         try:
             db_id = int(float(db_id_raw))
+
         except Exception:
             errors.append({
                 "db_name": db_name,
@@ -289,9 +309,12 @@ def main():
 
         if db_id in db_fields_cache:
             fields, err = db_fields_cache[db_id]
+
         else:
             print(f"🚀 Consultando db_fields para DB {db_id} | {db_name}")
+
             fields, err = get_db_fields(db_id)
+
             db_fields_cache[db_id] = (fields, err)
 
         if err:
@@ -304,53 +327,72 @@ def main():
 
         for f in fields:
             field_name = str(f.get("field_name", "")).strip()
+
             if not field_name:
                 continue
 
             key = (db_name, str(db_id), field_name)
+
             if key in seen:
                 continue
 
             seen.add(key)
+
             unique_rows.append([
                 db_name,
                 str(db_id),
                 field_name
             ])
 
-    # ordenar por db_name y field_name
+    # -------------------------
+    # SORT
+    # -------------------------
     if unique_rows:
-        df_unique = pd.DataFrame(unique_rows, columns=["DB_NAME", "DB_ID", "FIELD_NAME"])
+        df_unique = pd.DataFrame(
+            unique_rows,
+            columns=["DB_NAME", "DB_ID", "FIELD_NAME"]
+        )
+
         df_unique = df_unique.sort_values(
             by=["DB_NAME", "FIELD_NAME"],
             na_position="last"
         ).reset_index(drop=True)
 
-        output_rows = df_unique[["DB_NAME", "DB_ID", "FIELD_NAME"]].values.tolist()
+        output_rows = df_unique[
+            ["DB_NAME", "DB_ID", "FIELD_NAME"]
+        ].values.tolist()
+
     else:
         output_rows = []
 
     # -------------------------
-    # Limpiar y escribir O:Q
+    # LIMPIAR Y ESCRIBIR
     # -------------------------
-    print("🧹 Limpiando columnas O:Q...")
-    clear_range(SPREADSHEET_ID, f"{TARGET_SHEET}!O:Q")
+    print("🧹 Limpiando columnas R:T...")
 
-    print("✍️ Escribiendo lista única en columnas O:Q...")
+    clear_range(
+        SPREADSHEET_ID,
+        f"{TARGET_SHEET}!R:T"
+    )
+
+    print("✍️ Escribiendo lista única en columnas R:T...")
+
     write_table(
         spreadsheet_id=SPREADSHEET_ID,
         sheet_name=TARGET_SHEET,
-        start_cell="O1",
+        start_cell="R1",
         headers_list=["DB_NAME", "DB_ID", "FIELD_NAME"],
         rows_list=output_rows
     )
 
     print("✅ Proceso completado")
-    print(f"   - DB_IDs actualizados en columna B: {len(df_update)} filas")
-    print(f"   - Valores únicos escritos en O:Q: {len(output_rows)} filas")
+
+    print(f"   - DB_IDs actualizados en columna E: {len(df_update)} filas")
+    print(f"   - Valores únicos escritos en R:T: {len(output_rows)} filas")
 
     if errors:
         print("⚠️ Errores encontrados:")
+
         for e in errors[:20]:
             print(e)
 
