@@ -8,9 +8,6 @@ from googleapiclient.discovery import build
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# =========================
-# CONFIG
-# =========================
 api_key = os.environ["FEEDONOMICS_API_KEY"]
 service_path = os.getenv("FEEDONOMICS_SERVICE_PATH", "https://meta.feedonomics.com/api.php")
 
@@ -27,14 +24,8 @@ SHEET_NAME = os.getenv("SHEET_NAME", "Update Transformers")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-# =========================
-# GOOGLE SHEETS
-# =========================
 def get_sheets_service():
-    creds = Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE,
-        scopes=SCOPES
-    )
+    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds)
 
 
@@ -51,7 +42,7 @@ def read_sheet():
     if not values:
         raise Exception(f"No se encontraron datos en la tab '{SHEET_NAME}'")
 
-    headers_row = values[0]
+    headers_row = [str(h).strip().lower() for h in values[0]]
     data_rows = values[1:]
 
     normalized_rows = []
@@ -65,9 +56,6 @@ def read_sheet():
     return df
 
 
-# =========================
-# HELPERS
-# =========================
 def clean_int(value):
     value = str(value).strip()
     if not value:
@@ -87,7 +75,7 @@ def normalize_bool(value):
 def normalize_selector(value):
     value = str(value).strip()
     if not value:
-        raise ValueError("New Selector vacío")
+        raise ValueError("selector vacío")
 
     lowered = value.lower()
     if lowered == "true":
@@ -102,7 +90,7 @@ def normalize_transformer(value):
     value = str(value).strip()
 
     if not value:
-        raise ValueError("New Transformer vacío")
+        raise ValueError("transformer vacío")
 
     expression_signs = ["(", ")", "[", "]", ","]
     if any(sign in value for sign in expression_signs):
@@ -115,55 +103,66 @@ def normalize_transformer(value):
     return f"'{clean_value}'"
 
 
-def parse_exports_object(exports_value):
-    default_value = {"export_ids": ["0"], "all_exports": True}
+def normalize_exports_value(exports_value):
+    value = str(exports_value).strip()
 
-    if exports_value is None:
-        return default_value
+    if not value:
+        return {"export_ids": ["0"], "all_exports": True}
 
-    exports_str = str(exports_value).strip()
-    if not exports_str:
-        return default_value
+    if value in ["0", "0.0"]:
+        return {"export_ids": ["0"], "all_exports": True}
 
     try:
-        parsed = json.loads(exports_str)
+        parsed = json.loads(value)
 
-        if not isinstance(parsed, dict):
-            return default_value
+        if isinstance(parsed, dict):
+            raw_export_ids = parsed.get("export_ids", ["0"])
+            raw_all_exports = parsed.get("all_exports", False)
 
-        raw_export_ids = parsed.get("export_ids", ["0"])
-        raw_all_exports = parsed.get("all_exports", False)
+            if not isinstance(raw_export_ids, list):
+                raw_export_ids = [raw_export_ids]
 
-        if not isinstance(raw_export_ids, list):
-            raw_export_ids = [raw_export_ids]
+            normalized_ids = []
+            for item in raw_export_ids:
+                item_str = str(item).strip()
 
-        normalized_ids = []
+                if item_str == "":
+                    continue
 
-        for item in raw_export_ids:
-            item_str = str(item).strip()
+                try:
+                    if "." in item_str:
+                        item_str = str(int(float(item_str)))
+                except Exception:
+                    pass
 
-            if item_str == "":
-                continue
+                normalized_ids.append(item_str)
 
-            try:
-                if "." in item_str:
-                    item_str = str(int(float(item_str)))
-            except Exception:
-                pass
+            return {
+                "export_ids": normalized_ids or ["0"],
+                "all_exports": bool(raw_all_exports)
+            }
 
-            normalized_ids.append(item_str)
-
-        return {
-            "export_ids": normalized_ids,
-            "all_exports": bool(raw_all_exports)
-        }
+        if isinstance(parsed, list):
+            return {
+                "export_ids": [str(int(float(x))) if str(x).replace(".", "", 1).isdigit() else str(x) for x in parsed],
+                "all_exports": False
+            }
 
     except Exception:
-        return default_value
+        pass
+
+    try:
+        export_id = str(int(float(value)))
+        return {
+            "export_ids": [export_id],
+            "all_exports": export_id == "0"
+        }
+    except Exception:
+        return {"export_ids": ["0"], "all_exports": True}
 
 
 def parse_export_ids(exports_value):
-    exports_obj = parse_exports_object(exports_value)
+    exports_obj = normalize_exports_value(exports_value)
 
     if exports_obj["all_exports"] is True:
         return ["0"]
@@ -171,9 +170,14 @@ def parse_export_ids(exports_value):
     return exports_obj["export_ids"]
 
 
-# =========================
-# FEEDONOMICS UPDATE
-# =========================
+def get_selector_value(row):
+    return row.get("new selector", row.get("selector", ""))
+
+
+def get_transformer_value(row):
+    return row.get("new transformer", row.get("transformer", ""))
+
+
 def update_transformer(row):
     db_id = clean_int(row["db_id"])
     transformer_id = clean_int(row["transformer_id"])
@@ -182,11 +186,11 @@ def update_transformer(row):
     if not field_name:
         raise ValueError("field_name vacío")
 
-    selector = normalize_selector(row["New Selector"])
-    transformer = normalize_transformer(row["New Transformer"])
+    selector = normalize_selector(get_selector_value(row))
+    transformer = normalize_transformer(get_transformer_value(row))
     enabled = normalize_bool(row["enabled"])
 
-    exports_obj = parse_exports_object(row["exports"])
+    exports_obj = normalize_exports_value(row["exports"])
     export_ids = parse_export_ids(row["exports"])
 
     url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
@@ -200,13 +204,7 @@ def update_transformer(row):
         "exports": exports_obj
     }
 
-    resp = requests.put(
-        url,
-        headers=headers,
-        json=payload,
-        verify=False,
-        timeout=60
-    )
+    resp = requests.put(url, headers=headers, json=payload, verify=False, timeout=60)
 
     try:
         response_text = json.dumps(resp.json(), ensure_ascii=False)
@@ -216,9 +214,6 @@ def update_transformer(row):
     return resp.status_code, response_text, payload
 
 
-# =========================
-# FEEDONOMICS CREATE
-# =========================
 def create_transformer(row):
     db_id = clean_int(row["db_id"])
     field_name = str(row["field_name"]).strip()
@@ -226,11 +221,11 @@ def create_transformer(row):
     if not field_name:
         raise ValueError("field_name vacío")
 
-    selector = normalize_selector(row["New Selector"])
-    transformer = normalize_transformer(row["New Transformer"])
+    selector = normalize_selector(get_selector_value(row))
+    transformer = normalize_transformer(get_transformer_value(row))
     enabled = normalize_bool(row["enabled"])
 
-    exports_obj = parse_exports_object(row["exports"])
+    exports_obj = normalize_exports_value(row["exports"])
     export_ids = parse_export_ids(row["exports"])
 
     url = f"{service_path}/dbs/{db_id}/transformers"
@@ -244,13 +239,7 @@ def create_transformer(row):
         "exports": exports_obj
     }
 
-    resp = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        verify=False,
-        timeout=60
-    )
+    resp = requests.post(url, headers=headers, json=payload, verify=False, timeout=60)
 
     try:
         response_text = json.dumps(resp.json(), ensure_ascii=False)
@@ -260,21 +249,13 @@ def create_transformer(row):
     return resp.status_code, response_text, payload
 
 
-# =========================
-# FEEDONOMICS DELETE
-# =========================
 def delete_transformer(row):
     db_id = clean_int(row["db_id"])
     transformer_id = clean_int(row["transformer_id"])
 
     url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
 
-    resp = requests.delete(
-        url,
-        headers=headers,
-        verify=False,
-        timeout=60
-    )
+    resp = requests.delete(url, headers=headers, verify=False, timeout=60)
 
     try:
         response_text = json.dumps(resp.json(), ensure_ascii=False)
@@ -289,9 +270,6 @@ def delete_transformer(row):
     return resp.status_code, response_text, payload
 
 
-# =========================
-# WRITE STATUS IN B:C
-# =========================
 def write_status(results):
     service = get_sheets_service()
 
@@ -308,15 +286,11 @@ def write_status(results):
     ).execute()
 
 
-# =========================
-# MAIN
-# =========================
 def main():
     df = read_sheet()
 
     required_columns = [
         "action",
-        "update_status",
         "error_message",
         "db_name",
         "db_id",
@@ -325,9 +299,7 @@ def main():
         "selector",
         "transformer",
         "enabled",
-        "exports",
-        "New Selector",
-        "New Transformer"
+        "exports"
     ]
 
     missing_cols = [col for col in required_columns if col not in df.columns]
@@ -364,14 +336,6 @@ def main():
 
                 else:
                     print(f"Fila {sheet_row} | action: {action.upper()}")
-
-                    if action in ["update", "new"]:
-                        exports_obj = parse_exports_object(row.get("exports", ""))
-                        export_ids = parse_export_ids(row.get("exports", ""))
-
-                        print(f"Fila {sheet_row} | exports original: {row.get('exports', '')}")
-                        print(f"Fila {sheet_row} | exports parseado: {json.dumps(exports_obj, ensure_ascii=False)}")
-                        print(f"Fila {sheet_row} | export_id enviado: {export_ids}")
 
                     if action == "update":
                         status_code, response, payload = update_transformer(row)
