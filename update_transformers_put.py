@@ -43,7 +43,7 @@ def read_sheet():
 
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"{SHEET_NAME}!A:J"
+        range=f"{SHEET_NAME}!A:Z"
     ).execute()
 
     values = result.get("values", [])
@@ -116,9 +116,6 @@ def normalize_transformer(value):
 
 
 def parse_exports_object(exports_value):
-    """
-    Mantiene el objeto completo de exports, normalizando export_ids como strings.
-    """
     default_value = {"export_ids": ["0"], "all_exports": True}
 
     if exports_value is None:
@@ -141,12 +138,13 @@ def parse_exports_object(exports_value):
             raw_export_ids = [raw_export_ids]
 
         normalized_ids = []
+
         for item in raw_export_ids:
             item_str = str(item).strip()
+
             if item_str == "":
                 continue
 
-            # si viene 470091.0, lo normalizamos a 470091
             try:
                 if "." in item_str:
                     item_str = str(int(float(item_str)))
@@ -165,14 +163,6 @@ def parse_exports_object(exports_value):
 
 
 def parse_export_ids(exports_value):
-    """
-    Devuelve export_id como lista de strings.
-
-    Reglas:
-    - all_exports = true  -> ["0"]
-    - all_exports = false -> usar export_ids reales como strings
-    - si viene vacío      -> []
-    """
     exports_obj = parse_exports_object(exports_value)
 
     if exports_obj["all_exports"] is True:
@@ -227,7 +217,80 @@ def update_transformer(row):
 
 
 # =========================
-# WRITE STATUS IN K:L
+# FEEDONOMICS CREATE
+# =========================
+def create_transformer(row):
+    db_id = clean_int(row["db_id"])
+    field_name = str(row["field_name"]).strip()
+
+    if not field_name:
+        raise ValueError("field_name vacío")
+
+    selector = normalize_selector(row["New Selector"])
+    transformer = normalize_transformer(row["New Transformer"])
+    enabled = normalize_bool(row["enabled"])
+
+    exports_obj = parse_exports_object(row["exports"])
+    export_ids = parse_export_ids(row["exports"])
+
+    url = f"{service_path}/dbs/{db_id}/transformers"
+
+    payload = {
+        "enabled": enabled,
+        "field_name": field_name,
+        "selector": selector,
+        "transformer": transformer,
+        "export_id": export_ids,
+        "exports": exports_obj
+    }
+
+    resp = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        verify=False,
+        timeout=60
+    )
+
+    try:
+        response_text = json.dumps(resp.json(), ensure_ascii=False)
+    except Exception:
+        response_text = resp.text
+
+    return resp.status_code, response_text, payload
+
+
+# =========================
+# FEEDONOMICS DELETE
+# =========================
+def delete_transformer(row):
+    db_id = clean_int(row["db_id"])
+    transformer_id = clean_int(row["transformer_id"])
+
+    url = f"{service_path}/dbs/{db_id}/transformers/{transformer_id}"
+
+    resp = requests.delete(
+        url,
+        headers=headers,
+        verify=False,
+        timeout=60
+    )
+
+    try:
+        response_text = json.dumps(resp.json(), ensure_ascii=False)
+    except Exception:
+        response_text = resp.text
+
+    payload = {
+        "db_id": db_id,
+        "transformer_id": transformer_id
+    }
+
+    return resp.status_code, response_text, payload
+
+
+# =========================
+# WRITE STATUS IN B:C
 # =========================
 def write_status(results):
     service = get_sheets_service()
@@ -239,7 +302,7 @@ def write_status(results):
 
     service.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"{SHEET_NAME}!K1",
+        range=f"{SHEET_NAME}!B1",
         valueInputOption="RAW",
         body={"values": values}
     ).execute()
@@ -252,6 +315,9 @@ def main():
     df = read_sheet()
 
     required_columns = [
+        "action",
+        "update_status",
+        "error_message",
         "db_name",
         "db_id",
         "field_name",
@@ -265,6 +331,7 @@ def main():
     ]
 
     missing_cols = [col for col in required_columns if col not in df.columns]
+
     if missing_cols:
         raise Exception(f"Faltan columnas requeridas: {missing_cols}")
 
@@ -274,37 +341,61 @@ def main():
         sheet_row = idx + 2
 
         try:
-            db_id_raw = str(row.get("db_id", "")).strip()
-            transformer_id_raw = str(row.get("transformer_id", "")).strip()
+            action = str(row.get("action", "")).strip().lower()
 
-            if not db_id_raw and not transformer_id_raw:
+            if action not in ["update", "new", "delete"]:
                 status = "SKIPPED"
-                error = "Fila omitida: db_id y transformer_id vacíos"
-                print(f"⏭️ Fila {sheet_row} omitida")
+                error = f"Fila omitida: action '{action}' no soportado"
+                print(f"⏭️ Fila {sheet_row} omitida | action: {row.get('action', '')}")
+
             else:
-                exports_obj = parse_exports_object(row.get("exports", ""))
-                export_ids = parse_export_ids(row.get("exports", ""))
+                db_id_raw = str(row.get("db_id", "")).strip()
+                transformer_id_raw = str(row.get("transformer_id", "")).strip()
 
-                print(f"Fila {sheet_row} | exports original: {row.get('exports', '')}")
-                print(f"Fila {sheet_row} | exports parseado: {json.dumps(exports_obj, ensure_ascii=False)}")
-                print(f"Fila {sheet_row} | export_id enviado: {export_ids}")
-
-                status_code, response, payload = update_transformer(row)
-
-                if status_code == 200:
-                    status = "SUCCESS"
-                    error = ""
-                    print(f"✅ Fila {sheet_row} OK")
-                else:
+                if not db_id_raw:
                     status = "ERROR"
-                    error = response
-                    print(f"❌ Fila {sheet_row} ERROR {status_code}")
+                    error = "db_id vacío"
+                    print(f"❌ Fila {sheet_row} ERROR: {error}")
 
-                print("Payload enviado:")
-                print(json.dumps(payload, indent=2, ensure_ascii=False))
-                print("Respuesta:")
-                print(response)
-                print("-" * 80)
+                elif action in ["update", "delete"] and not transformer_id_raw:
+                    status = "ERROR"
+                    error = "transformer_id vacío para action Update/Delete"
+                    print(f"❌ Fila {sheet_row} ERROR: {error}")
+
+                else:
+                    print(f"Fila {sheet_row} | action: {action.upper()}")
+
+                    if action in ["update", "new"]:
+                        exports_obj = parse_exports_object(row.get("exports", ""))
+                        export_ids = parse_export_ids(row.get("exports", ""))
+
+                        print(f"Fila {sheet_row} | exports original: {row.get('exports', '')}")
+                        print(f"Fila {sheet_row} | exports parseado: {json.dumps(exports_obj, ensure_ascii=False)}")
+                        print(f"Fila {sheet_row} | export_id enviado: {export_ids}")
+
+                    if action == "update":
+                        status_code, response, payload = update_transformer(row)
+
+                    elif action == "new":
+                        status_code, response, payload = create_transformer(row)
+
+                    elif action == "delete":
+                        status_code, response, payload = delete_transformer(row)
+
+                    if status_code in [200, 201, 204]:
+                        status = "SUCCESS"
+                        error = ""
+                        print(f"✅ Fila {sheet_row} OK")
+                    else:
+                        status = "ERROR"
+                        error = response
+                        print(f"❌ Fila {sheet_row} ERROR {status_code}")
+
+                    print("Payload enviado:")
+                    print(json.dumps(payload, indent=2, ensure_ascii=False))
+                    print("Respuesta:")
+                    print(response)
+                    print("-" * 80)
 
         except Exception as e:
             status = "ERROR"
@@ -319,9 +410,9 @@ def main():
 
     write_status(results)
 
-    print("\n✅ Resultados escritos en columnas K y L")
-    print("K = update_status")
-    print("L = error_message")
+    print("\n✅ Resultados escritos en columnas B y C")
+    print("B = update_status")
+    print("C = error_message")
 
 
 if __name__ == "__main__":
