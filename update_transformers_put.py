@@ -133,12 +133,27 @@ def normalize_transformer(value):
     if not value:
         raise ValueError("transformer vacío")
 
+    # Si empieza con URL literal sin comilla inicial, envolver solo la parte fija inicial
+    if value.startswith("http://") or value.startswith("https://"):
+        first_expr_pos = len(value)
+
+        for marker in ["lcase(", "ucase(", "replace_pattern(", "if(", "concat(", "["]:
+            pos = value.find(marker)
+            if pos != -1:
+                first_expr_pos = min(first_expr_pos, pos)
+
+        literal_part = value[:first_expr_pos]
+        expression_part = value[first_expr_pos:]
+
+        return f"'{literal_part}'{expression_part}"
+
+    # Si ya está correctamente armado como literal + función
+    if value.startswith("'"):
+        return value
+
     expression_signs = ["(", ")", "[", "]", ","]
 
     if any(sign in value for sign in expression_signs):
-        return value
-
-    if value.startswith("'") and value.endswith("'"):
         return value
 
     clean_value = value.replace("'", "").strip()
